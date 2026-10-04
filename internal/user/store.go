@@ -106,6 +106,19 @@ func (s *Store) MarkBusy(ctx context.Context, tx *sql.Tx, orgID, userID uuid.UUI
 	return nil
 }
 
+// LockUser takes a row lock on the user inside tx (SELECT ... FOR UPDATE).
+// Call persistence always locks the user row before touching any call row, so
+// Create, Apply and the startup sweep cannot deadlock on opposite lock orders.
+func (s *Store) LockUser(ctx context.Context, tx *sql.Tx, orgID, userID uuid.UUID) error {
+	var id uuid.UUID
+	err := tx.QueryRowContext(ctx,
+		`SELECT id FROM users WHERE id = $1 AND organization_id = $2 FOR UPDATE`, userID, orgID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	return err
+}
+
 // RestorePresence puts back the presence saved by MarkBusy inside tx, clears
 // presence_before_busy and bumps the version. It is a no-op when nothing was saved.
 func (s *Store) RestorePresence(ctx context.Context, tx *sql.Tx, orgID, userID uuid.UUID) error {

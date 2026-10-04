@@ -151,6 +151,22 @@ func (s *Store) Apply(ctx context.Context, orgID uuid.UUID, callID uuid.UUID, cm
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// Lock order is always user row, then call row (same as Create). The owner
+	// is read without a lock, the user row is locked, and only then is the call
+	// row locked and reloaded. The owner of a call never changes.
+	var ownerID uuid.UUID
+	err = tx.QueryRowContext(ctx,
+		`SELECT owner_user_id FROM calls WHERE id = $1 AND organization_id = $2`, callID, orgID).Scan(&ownerID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Call{}, ErrNotFound
+	}
+	if err != nil {
+		return Call{}, err
+	}
+	if err := s.Users.LockUser(ctx, tx, orgID, ownerID); err != nil {
+		return Call{}, fmt.Errorf("lock owner: %w", err)
+	}
+
 	c, err := scanCall(tx.QueryRowContext(ctx,
 		`SELECT `+callColumns+` FROM calls WHERE id = $1 AND organization_id = $2 FOR UPDATE`, callID, orgID))
 	if errors.Is(err, sql.ErrNoRows) {
