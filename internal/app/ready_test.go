@@ -40,6 +40,20 @@ func TestHealthReadyFailsWithoutDB(t *testing.T) {
 	}
 }
 
+func TestShutdownWithCanceledContextStillClosesDB(t *testing.T) {
+	t.Parallel()
+	closed := false
+	a := newApp(func(context.Context) error { return nil }, func() error { closed = true; return nil })
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := a.Shutdown(ctx); err == nil {
+		t.Fatal("expected context.Canceled")
+	}
+	if !closed {
+		t.Fatal("close not called with canceled context")
+	}
+}
+
 func TestReadyAndShutdownDelegate(t *testing.T) {
 	t.Parallel()
 	closed := false

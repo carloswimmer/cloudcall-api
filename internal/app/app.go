@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -107,8 +108,13 @@ func (a *App) Ready(ctx context.Context) error {
 }
 
 // Shutdown closes the SSE hub (cancelling every stream) and then the database pool.
-// It returns when both steps finish or when ctx is cancelled.
+// Both steps always run in that order; ctx cancellation does not skip db.Close().
 func (a *App) Shutdown(ctx context.Context) error {
+	var errs []error
+	if err := ctx.Err(); err != nil {
+		errs = append(errs, err)
+	}
+
 	if a.hub != nil {
 		done := make(chan struct{})
 		go func() {
@@ -118,20 +124,26 @@ func (a *App) Shutdown(ctx context.Context) error {
 		select {
 		case <-done:
 		case <-ctx.Done():
-			return ctx.Err()
+			<-done
 		}
 	}
-	if a.closeFn == nil {
-		return nil
+
+	if a.closeFn != nil {
+		done := make(chan error, 1)
+		go func() { done <- a.closeFn() }()
+		select {
+		case err := <-done:
+			if err != nil {
+				errs = append(errs, err)
+			}
+		case <-ctx.Done():
+			if err := <-done; err != nil {
+				errs = append(errs, err)
+			}
+		}
 	}
-	done := make(chan error, 1)
-	go func() { done <- a.closeFn() }()
-	select {
-	case err := <-done:
-		return err
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+
+	return errors.Join(errs...)
 }
 
 func (a *App) Handler() http.Handler { return a.mux }
