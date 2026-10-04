@@ -77,3 +77,10 @@
 - Comandos: `DATABASE_URL=… go test ./... -count=1`, `go vet ./...`, `ruby -ryaml -e "YAML.load_file('api/openapi.yaml')"`
 - Resultado: `GET /api/v1/calls` (filtros `direction`, `status`, `terminal`, `from`, `to`, `page`, `pageSize`), `GET /api/v1/calls/{id}` com `transitions` e `note`, `PUT /api/v1/calls/{id}/note`; OpenAPI atualizado
 - Pendente: dashboard (Task 14), SSE (Task 15)
+
+## Task 14 — dashboard do dia no fuso da organização
+- Conceitos: uma única consulta SQL que une a organização (fuso `timezone` lido da própria linha) a `calls` com `LEFT JOIN LATERAL`; "hoje" é decidido no banco com `(created_at AT TIME ZONE tz)::date = (now() AT TIME ZONE tz)::date`, então relógio e instantes gravados concordam sobre o dia civil (e não em UTC); agregação com `count(...) FILTER (WHERE ...)` em vez de várias consultas; `active` usa outro filtro na mesma passada (dono demo, status não terminal) e por isso não depende do dia; `LEFT JOIN` garante zeros quando não há chamadas; organização inexistente não devolve linha e vira 500 `internal_error` sem vazar o erro bruto; `to_char(..., 'YYYY-MM-DD')` evita depender do `DateStyle` da sessão
+- Testes: organização isolada com fuso `UTC` (e `Pacific/Kiritimati`, `Pacific/Pago_Pago`, `Europe/Berlin` no teste de fronteira da meia-noite local) em vez de alterar a organização seed, porque pacotes de teste rodam em paralelo e compartilham o banco; teste de fumaça separado na organização seed confere o fuso `Europe/Berlin`
+- Comandos: `DATABASE_URL=… go test ./... -count=1`, `go vet ./...`, `ruby -ryaml -e "YAML.load_file('api/openapi.yaml')"`
+- Resultado: `GET /api/v1/dashboard` com `date`, `timezone`, `total`, `inbound`, `outbound`, `missed`, `active`; OpenAPI atualizado com o schema `Dashboard`
+- Pendente: SSE (Task 15)

@@ -217,3 +217,26 @@ func TestNewMountsCallRoutes(t *testing.T) {
 		}
 	}
 }
+
+func TestNewMountsDashboardRoute(t *testing.T) {
+	url := os.Getenv("DATABASE_URL")
+	if url == "" {
+		t.Skip("DATABASE_URL not set")
+	}
+	a, err := app.New(context.Background(), config.Config{DatabaseURL: url, DemoMode: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.Shutdown() })
+	srv := httptest.NewServer(a.WithMiddleware("http://localhost:4200"))
+	t.Cleanup(srv.Close)
+
+	res, err := http.Get(srv.URL + "/api/v1/dashboard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status %d", res.StatusCode)
+	}
+}

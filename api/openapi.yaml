@@ -3,12 +3,12 @@ info:
   title: CloudCall Desk API
   version: 0.1.0
   description: |
-    Contrato HTTP do backend demo CloudCall Desk (Tasks 2–13).
+    Contrato HTTP do backend demo CloudCall Desk (Tasks 2–14).
 
     Este documento cobre sondas de saúde, identidade, presença de colegas, contatos
     (busca, criação, edição parcial e remoção), comandos de chamada, histórico, detalhe e notas
-    de chamadas e rotas do simulador demo.
-    Rotas de tasks futuras (dashboard, SSE) ainda não constam neste documento.
+    de chamadas, agregados do dia (dashboard) e rotas do simulador demo.
+    Rotas de tasks futuras (SSE) ainda não constam neste documento.
 
 servers:
   - url: http://localhost:8080
@@ -22,6 +22,8 @@ tags:
     description: Busca, paginação, criação, edição parcial e remoção de contatos.
   - name: Calls
     description: Início de chamadas realizadas, ações do usuário, histórico, detalhe e notas.
+  - name: Dashboard
+    description: Agregados do dia civil no fuso horário da organização.
   - name: Demo
     description: Simulador de rede (registrado apenas com `DEMO_MODE=true`).
 
@@ -664,6 +666,36 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /api/v1/dashboard:
+    get:
+      tags: [Dashboard]
+      operationId: getDashboard
+      summary: Agregados do dia da organização
+      description: |
+        Retorna contagens das chamadas criadas no dia civil atual, calculado no fuso horário da
+        organização (`timezone`, `Europe/Berlin` no seed), e não em UTC. `total`, `inbound`,
+        `outbound` e `missed` consideram apenas chamadas com `createdAt` nesse dia;
+        `missed` conta as de status `missed`. `active` é a contagem atual de chamadas não terminais
+        (`dialing`, `ringing` ou `active`) do usuário demo e não se limita ao dia de hoje.
+        O cliente nunca envia identificadores de usuário ou organização.
+      responses:
+        "200":
+          description: Agregados do dia
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dashboard"
+              example:
+                date: "2026-10-04"
+                timezone: Europe/Berlin
+                total: 4
+                inbound: 2
+                outbound: 2
+                missed: 1
+                active: 0
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /api/v1/demo/incoming-call:
     post:
       tags: [Demo]
@@ -1200,3 +1232,36 @@ components:
           type: string
           enum: [no_answer, ring_timeout, network_error]
           description: Motivo da falha simulada. `simulation_interrupted` é rejeitado com 400.
+
+    Dashboard:
+      type: object
+      required: [date, timezone, total, inbound, outbound, missed, active]
+      properties:
+        date:
+          type: string
+          format: date
+          description: Data civil de hoje no fuso horário da organização (`YYYY-MM-DD`).
+        timezone:
+          type: string
+          description: Nome IANA do fuso horário da organização.
+          examples: [Europe/Berlin]
+        total:
+          type: integer
+          minimum: 0
+          description: Chamadas criadas hoje (qualquer direção e status).
+        inbound:
+          type: integer
+          minimum: 0
+          description: Chamadas recebidas criadas hoje.
+        outbound:
+          type: integer
+          minimum: 0
+          description: Chamadas realizadas criadas hoje.
+        missed:
+          type: integer
+          minimum: 0
+          description: Chamadas com status `missed` criadas hoje.
+        active:
+          type: integer
+          minimum: 0
+          description: Chamadas não terminais do usuário demo agora, independentemente do dia de criação.

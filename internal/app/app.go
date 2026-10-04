@@ -8,6 +8,7 @@ import (
 
 	"cloudcall/internal/call"
 	"cloudcall/internal/contact"
+	"cloudcall/internal/dashboard"
 	"cloudcall/internal/platform/config"
 	"cloudcall/internal/platform/db"
 	"cloudcall/internal/platform/httpx"
@@ -55,6 +56,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	contact.NewHandler(contacts, db.OrganizationID).Register(a.mux)
 	callHandler := call.NewHandler(calls, contacts, db.OrganizationID, db.DemoUserID)
 	callHandler.Register(a.mux)
+	dashboard.NewHandler(sqlDB, db.OrganizationID, db.DemoUserID).Register(a.mux)
 	if cfg.DemoMode {
 		callHandler.RegisterDemo(a.mux)
 	}
