@@ -111,8 +111,9 @@ func (a *App) Ready(ctx context.Context) error {
 // Both steps always run in that order; ctx cancellation does not skip db.Close().
 func (a *App) Shutdown(ctx context.Context) error {
 	var errs []error
-	if err := ctx.Err(); err != nil {
-		errs = append(errs, err)
+	ctxErr := ctx.Err()
+	if ctxErr != nil {
+		errs = append(errs, ctxErr)
 	}
 
 	if a.hub != nil {
@@ -141,6 +142,10 @@ func (a *App) Shutdown(ctx context.Context) error {
 				errs = append(errs, err)
 			}
 		}
+	}
+
+	if err := ctx.Err(); err != nil && !errors.Is(ctxErr, err) {
+		errs = append(errs, err)
 	}
 
 	return errors.Join(errs...)

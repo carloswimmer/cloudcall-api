@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestHealthReadyFailsWithoutDB(t *testing.T) {
@@ -51,6 +52,28 @@ func TestShutdownWithCanceledContextStillClosesDB(t *testing.T) {
 	}
 	if !closed {
 		t.Fatal("close not called with canceled context")
+	}
+}
+
+func TestShutdownReturnsContextErrorIfExpiredDuringClose(t *testing.T) {
+	t.Parallel()
+	closed := false
+	a := newApp(
+		func(context.Context) error { return nil },
+		func() error {
+			time.Sleep(50 * time.Millisecond)
+			closed = true
+			return nil
+		},
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	err := a.Shutdown(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected DeadlineExceeded, got %v", err)
+	}
+	if !closed {
+		t.Fatal("close not called when context expired during closeFn")
 	}
 }
 
