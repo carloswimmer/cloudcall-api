@@ -51,7 +51,13 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	}
 	a := newApp(sqlDB.PingContext, sqlDB.Close)
 	user.NewHandler(users, db.OrganizationID, db.DemoUserID).WithCallLock(calls).Register(a.mux)
-	contact.NewHandler(&contact.Store{DB: sqlDB}, db.OrganizationID).Register(a.mux)
+	contacts := &contact.Store{DB: sqlDB}
+	contact.NewHandler(contacts, db.OrganizationID).Register(a.mux)
+	callHandler := call.NewHandler(calls, contacts, db.OrganizationID, db.DemoUserID)
+	callHandler.Register(a.mux)
+	if cfg.DemoMode {
+		callHandler.RegisterDemo(a.mux)
+	}
 	return a, nil
 }
 

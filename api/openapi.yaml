@@ -3,11 +3,11 @@ info:
   title: CloudCall Desk API
   version: 0.1.0
   description: |
-    Contrato HTTP do backend demo CloudCall Desk (Tasks 2–9).
+    Contrato HTTP do backend demo CloudCall Desk (Tasks 2–12).
 
-    Este documento cobre sondas de saúde, identidade, presença de colegas e contatos
-    (busca, criação, edição parcial e remoção).
-    Rotas de tasks futuras ainda não constam neste documento.
+    Este documento cobre sondas de saúde, identidade, presença de colegas, contatos
+    (busca, criação, edição parcial e remoção), comandos de chamada e rotas do simulador demo.
+    Rotas de tasks futuras (histórico, notas, dashboard, SSE) ainda não constam neste documento.
 
 servers:
   - url: http://localhost:8080
@@ -19,6 +19,10 @@ tags:
     description: Usuário demo, organização e colegas.
   - name: Contacts
     description: Busca, paginação, criação, edição parcial e remoção de contatos.
+  - name: Calls
+    description: Início de chamadas realizadas e ações do usuário sobre uma chamada.
+  - name: Demo
+    description: Simulador de rede (registrado apenas com `DEMO_MODE=true`).
 
 paths:
   /health/live:
@@ -134,8 +138,8 @@ paths:
       summary: Atualizar presença do usuário demo
       description: |
         Concorrência otimista via `expectedVersion`. Versão obsoleta retorna 409 `version_mismatch`.
-        Bloqueio de presença durante chamada ativa entra em task futura; até lá, `busy` é permitido
-        sem chamada.
+        Durante uma chamada não terminal (dialing, ringing ou active) a presença fica travada e a
+        resposta é 409 `presence_locked`. Sem chamada, `busy` manual é permitido.
       requestBody:
         required: true
         content:
@@ -414,6 +418,197 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/v1/calls:
+    post:
+      tags: [Calls]
+      operationId: createCall
+      summary: Iniciar chamada realizada
+      description: |
+        Cria uma chamada `outbound` em `dialing` para o usuário demo e marca a presença como `busy`.
+        Envie exatamente um entre `contactId` e `phone` (os dois ou nenhum retornam 400).
+        Com `contactId`, o nome e o telefone do contato são copiados para a chamada (snapshot).
+        Com `phone` (E.164), o nome do snapshot é `Unknown`.
+        Um `contactId` inexistente ou de outra organização retorna 404.
+        Se o usuário já tem uma chamada em `dialing`, `ringing` ou `active`, retorna 409 `active_call_exists`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCall"
+            examples:
+              byPhone:
+                value:
+                  phone: "+14155550100"
+              byContact:
+                value:
+                  contactId: eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee
+      responses:
+        "201":
+          description: Chamada criada em `dialing` (versão 1)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Call"
+        "400":
+          $ref: "#/components/responses/CallValidationError"
+        "404":
+          $ref: "#/components/responses/CallNotFound"
+        "409":
+          $ref: "#/components/responses/CallConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/calls/{id}/actions:
+    post:
+      tags: [Calls]
+      operationId: applyCallAction
+      summary: Aplicar ação do usuário a uma chamada
+      description: |
+        O backend decide a transição, os timestamps e a nova `version`; o cliente nunca grava o status.
+        Chamada `inbound`: `answer` e `reject` valem em `ringing`; `end` vale em `active`.
+        Chamada `outbound`: `end` vale em `dialing`, `ringing` e `active`.
+        `expectedVersion` obsoleto retorna 409 `version_mismatch`; ação ilegal no estado atual
+        (inclusive chamada já terminal) retorna 409 `invalid_transition`.
+      parameters:
+        - $ref: "#/components/parameters/CallId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CallActionRequest"
+            examples:
+              answer:
+                value:
+                  action: answer
+                  expectedVersion: 1
+      responses:
+        "200":
+          description: Chamada atualizada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Call"
+        "400":
+          $ref: "#/components/responses/CallValidationError"
+        "404":
+          $ref: "#/components/responses/CallNotFound"
+        "409":
+          $ref: "#/components/responses/CallConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/demo/incoming-call:
+    post:
+      tags: [Demo]
+      operationId: demoIncomingCall
+      summary: Simular chamada recebida
+      description: |
+        Disponível só com `DEMO_MODE=true`. Mesmo corpo e mesmas regras de `POST /api/v1/calls`,
+        mas cria uma chamada `inbound` em `ringing`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCall"
+            examples:
+              byPhone:
+                value:
+                  phone: "+14155550101"
+      responses:
+        "201":
+          description: Chamada criada em `ringing` (versão 1)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Call"
+        "400":
+          $ref: "#/components/responses/CallValidationError"
+        "404":
+          $ref: "#/components/responses/CallNotFound"
+        "409":
+          $ref: "#/components/responses/CallConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/demo/calls/{id}/connect:
+    post:
+      tags: [Demo]
+      operationId: demoConnectCall
+      summary: Simular progresso da rede em chamada realizada
+      description: |
+        Disponível só com `DEMO_MODE=true`. Em chamada `outbound`, avança `dialing` para `ringing`
+        e depois `ringing` para `active`. Em chamada `inbound` retorna 409 `invalid_transition`.
+      parameters:
+        - $ref: "#/components/parameters/CallId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExpectedVersionRequest"
+            examples:
+              first:
+                value:
+                  expectedVersion: 1
+      responses:
+        "200":
+          description: Chamada atualizada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Call"
+        "400":
+          $ref: "#/components/responses/CallValidationError"
+        "404":
+          $ref: "#/components/responses/CallNotFound"
+        "409":
+          $ref: "#/components/responses/CallConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/demo/calls/{id}/fail:
+    post:
+      tags: [Demo]
+      operationId: demoFailCall
+      summary: Simular falha de rede ou tempo esgotado
+      description: |
+        Disponível só com `DEMO_MODE=true`. Motivos aceitos por direção:
+        `outbound` aceita `no_answer` (em `dialing` ou `ringing`) e `network_error`, e termina em `failed`;
+        `inbound` aceita `ring_timeout` (em `ringing`), que termina em `missed`, e `network_error`, que termina em `failed`.
+        Motivo incompatível com a direção ou o estado, e o motivo reservado `simulation_interrupted`
+        (usado só pela varredura de inicialização), retornam 400.
+      parameters:
+        - $ref: "#/components/parameters/CallId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FailCallRequest"
+            examples:
+              missed:
+                value:
+                  expectedVersion: 1
+                  reason: ring_timeout
+      responses:
+        "200":
+          description: Chamada terminal (`failed` ou `missed`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Call"
+        "400":
+          $ref: "#/components/responses/CallValidationError"
+        "404":
+          $ref: "#/components/responses/CallNotFound"
+        "409":
+          $ref: "#/components/responses/CallConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
 components:
   parameters:
     ContactId:
@@ -424,6 +619,78 @@ components:
       schema:
         type: string
         format: uuid
+    CallId:
+      name: id
+      in: path
+      required: true
+      description: Identificador da chamada. Um valor malformado, desconhecido ou de outra organização retorna 404.
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    CallValidationError:
+      description: Erro de validação (`fieldErrors` por campo quando aplicável)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          examples:
+            both:
+              value:
+                code: validation_error
+                message: send exactly one of contactId or phone
+                fieldErrors:
+                  contactId: exactly one of contactId or phone is required
+                  phone: exactly one of contactId or phone is required
+                requestId: 550e8400-e29b-41d4-a716-446655440000
+            reason:
+              value:
+                code: validation_error
+                message: invalid request
+                fieldErrors:
+                  reason: is not valid for this call
+                requestId: 550e8400-e29b-41d4-a716-446655440000
+    CallNotFound:
+      description: Chamada ou contato não encontrado nesta organização
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            code: not_found
+            message: call not found
+            requestId: 550e8400-e29b-41d4-a716-446655440000
+    CallConflict:
+      description: |
+        Conflito. `code` é `active_call_exists` (já há chamada não terminal),
+        `version_mismatch` (`expectedVersion` obsoleto) ou `invalid_transition` (comando ilegal no estado atual).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          examples:
+            activeCallExists:
+              value:
+                code: active_call_exists
+                message: a call is already in progress
+                requestId: 550e8400-e29b-41d4-a716-446655440000
+            versionMismatch:
+              value:
+                code: version_mismatch
+                message: call version is stale
+                requestId: 550e8400-e29b-41d4-a716-446655440000
+            invalidTransition:
+              value:
+                code: invalid_transition
+                message: action is not allowed in the current call state
+                requestId: 550e8400-e29b-41d4-a716-446655440000
+    InternalError:
+      description: Erro interno
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
 
   schemas:
     Error:
@@ -436,6 +703,8 @@ components:
           examples:
             - validation_error
             - version_mismatch
+            - active_call_exists
+            - invalid_transition
             - not_found
             - conflict
             - internal_error
@@ -576,3 +845,108 @@ components:
         email:
           type: [string, "null"]
           description: Novo e-mail; `null` (ou vazio) remove o e-mail, omitir o mantém.
+
+    CallDirection:
+      type: string
+      enum: [inbound, outbound]
+
+    CallStatus:
+      type: string
+      enum: [dialing, ringing, active, ended, rejected, missed, failed]
+      description: |
+        `dialing`, `ringing` e `active` são não terminais; `ended`, `rejected`, `missed` e `failed` são terminais.
+
+    CallFailureReason:
+      type: string
+      enum: [no_answer, ring_timeout, network_error, simulation_interrupted]
+      description: |
+        `simulation_interrupted` é gravado só pela varredura de inicialização e nunca é aceito como entrada.
+
+    Call:
+      type: object
+      required: [id, contactId, peerName, peerPhone, direction, status, version, createdAt, startedAt, endedAt, failureReason]
+      properties:
+        id:
+          type: string
+          format: uuid
+        contactId:
+          type: [string, "null"]
+          format: uuid
+          description: Nulo quando a chamada foi feita só por telefone ou o contato foi removido.
+        peerName:
+          type: string
+          description: Nome copiado do contato na criação (ou `Unknown`); não muda se o contato for editado.
+        peerPhone:
+          type: string
+          description: Telefone E.164 copiado na criação.
+        direction:
+          $ref: "#/components/schemas/CallDirection"
+        status:
+          $ref: "#/components/schemas/CallStatus"
+        version:
+          type: integer
+          minimum: 1
+          description: Token de concorrência otimista; incrementa em cada transição.
+        createdAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: [string, "null"]
+          format: date-time
+          description: Momento em que a chamada ficou `active`.
+        endedAt:
+          type: [string, "null"]
+          format: date-time
+          description: Momento em que a chamada chegou a um estado terminal.
+        failureReason:
+          oneOf:
+            - $ref: "#/components/schemas/CallFailureReason"
+            - type: "null"
+
+    CreateCall:
+      type: object
+      description: Envie exatamente um entre `contactId` e `phone`.
+      properties:
+        contactId:
+          type: string
+          format: uuid
+          description: Contato da organização a chamar.
+        phone:
+          type: string
+          description: Telefone E.164 (`+` e 8–15 dígitos, sem zero inicial) de um número fora da agenda.
+      oneOf:
+        - required: [contactId]
+        - required: [phone]
+
+    CallActionRequest:
+      type: object
+      required: [action, expectedVersion]
+      properties:
+        action:
+          type: string
+          enum: [answer, reject, end]
+        expectedVersion:
+          type: integer
+          minimum: 1
+          description: Último `version` conhecido da chamada.
+
+    ExpectedVersionRequest:
+      type: object
+      required: [expectedVersion]
+      properties:
+        expectedVersion:
+          type: integer
+          minimum: 1
+          description: Último `version` conhecido da chamada.
+
+    FailCallRequest:
+      type: object
+      required: [expectedVersion, reason]
+      properties:
+        expectedVersion:
+          type: integer
+          minimum: 1
+        reason:
+          type: string
+          enum: [no_answer, ring_timeout, network_error]
+          description: Motivo da falha simulada. `simulation_interrupted` é rejeitado com 400.

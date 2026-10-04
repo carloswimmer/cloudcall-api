@@ -124,6 +124,19 @@ func (s *Store) Create(ctx context.Context, orgID uuid.UUID, in NewContact) (Con
 	return c, nil
 }
 
+// Get returns one contact of the organization. An unknown ID yields ErrNotFound.
+func (s *Store) Get(ctx context.Context, orgID, id uuid.UUID) (Contact, error) {
+	c, err := scanContact(s.DB.QueryRowContext(ctx,
+		`SELECT `+contactColumns+` FROM contacts WHERE id = $1 AND organization_id = $2`, id, orgID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Contact{}, ErrNotFound
+	}
+	if err != nil {
+		return Contact{}, fmt.Errorf("get contact: %w", err)
+	}
+	return c, nil
+}
+
 // Patch holds the fields to change. A nil Name or Phone is left untouched;
 // SetEmail with a nil Email clears the email.
 type Patch struct {

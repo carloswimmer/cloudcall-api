@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -177,5 +178,42 @@ func TestNewMountsContactRoutes(t *testing.T) {
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("status %d", res.StatusCode)
+	}
+}
+
+// An empty body is rejected with 400 before any call is created, so this proves
+// the routes are mounted without touching the shared demo user.
+func TestNewMountsCallRoutes(t *testing.T) {
+	url := os.Getenv("DATABASE_URL")
+	if url == "" {
+		t.Skip("DATABASE_URL not set")
+	}
+	paths := []string{
+		"/api/v1/calls",
+		"/api/v1/demo/incoming-call",
+	}
+	for _, demo := range []bool{true, false} {
+		a, err := app.New(context.Background(), config.Config{DatabaseURL: url, DemoMode: demo})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = a.Shutdown() })
+		srv := httptest.NewServer(a.Handler())
+		t.Cleanup(srv.Close)
+
+		for _, p := range paths {
+			res, err := http.Post(srv.URL+p, "application/json", strings.NewReader(`{}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			res.Body.Close()
+			want := http.StatusBadRequest
+			if !demo && strings.Contains(p, "/demo/") {
+				want = http.StatusNotFound
+			}
+			if res.StatusCode != want {
+				t.Fatalf("demo=%v POST %s: status %d, want %d", demo, p, res.StatusCode, want)
+			}
+		}
 	}
 }

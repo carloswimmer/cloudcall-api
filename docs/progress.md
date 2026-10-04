@@ -65,3 +65,9 @@
 - Comandos: `DATABASE_URL=… go test ./... -count=1`, `go test -race ./internal/call`, `go vet ./...`
 - Resultado: `call.Store` com `Create`, `Apply`, `Get`, `HasNonTerminal` e `SweepInterrupted`; `PATCH /api/v1/me/presence` devolve 409 `presence_locked` durante chamada; `app.New` varre chamadas interrompidas após o seed
 - Pendente: rotas HTTP de chamadas (Task 12), notas (Task 13), SSE (Task 15)
+
+## Task 12 — comandos de chamada e rotas do simulador demo
+- Conceitos: handler HTTP com dependência por interface pequena (`ContactFinder`, satisfeita por `*contact.Store`), validação "exatamente um de" (`contactId` ou `phone`) antes de tocar o banco, verificação do contato na organização antes do `INSERT` para o cliente nunca ver erro bruto de chave estrangeira (`23503` ainda mapeado para 404 se o contato sumir entre a consulta e o insert), snapshot de nome e telefone na criação, DTO de resposta separado da struct de domínio (`json` tags só na borda), mapeamento de erros de domínio com `errors.Is` (`ErrActiveCallExists`/`ErrVersionMismatch`/`ErrInvalidTransition` → 409, `ErrValidation` → 400, `ErrNotFound` → 404), rotas do simulador registradas à parte (`RegisterDemo`) só quando `cfg.DemoMode`
+- Comandos: `DATABASE_URL=… go test ./... -count=1`, `go vet ./...`, `ruby -ryaml -e "YAML.load_file('api/openapi.yaml')"`
+- Resultado: `POST /api/v1/calls` (201 `dialing`), `POST /api/v1/calls/{id}/actions` (`answer|reject|end`), `POST /api/v1/demo/incoming-call` (201 `ringing`), `POST /api/v1/demo/calls/{id}/connect` e `/fail`; contato desconhecido → 404 `not_found`; `GET /calls`, notas, dashboard e SSE seguem fora; OpenAPI atualizado com `Call`, `CreateCall` e respostas reutilizáveis
+- Pendente: histórico, detalhe e notas (Task 13), dashboard, SSE (Task 15)
