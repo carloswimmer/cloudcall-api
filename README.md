@@ -20,7 +20,7 @@ Probe de prontidão: `GET /health/ready` retorna `200 {"status":"ready"}` quando
 
 ## Configuração
 
-Copie `.env.example` para `.env` e ajuste os valores conforme necessário.
+Copie `.env.example` para `.env` e ajuste os valores conforme necessário. Na subida, a API carrega `.env` do diretório de trabalho (opcional); variáveis já definidas no shell ou na plataforma (AWS, systemd, etc.) não são sobrescritas. Use `ENV_FILE` para apontar outro arquivo.
 
 ## Comandos
 

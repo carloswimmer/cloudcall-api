@@ -2,12 +2,20 @@ package config_test
 
 import (
 	"log/slog"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"cloudcall/internal/platform/config"
 )
 
+func disableDotEnvFile(t *testing.T) {
+	t.Helper()
+	t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), ".env"))
+}
+
 func TestLoadDefaults(t *testing.T) {
+	disableDotEnvFile(t)
 	t.Setenv("DATABASE_URL", "postgres://cloudcall:cloudcall@localhost:5432/cloudcall?sslmode=disable")
 	t.Setenv("HTTP_ADDR", "")
 	t.Setenv("CORS_ORIGIN", "")
@@ -23,6 +31,7 @@ func TestLoadDefaults(t *testing.T) {
 }
 
 func TestLoadRequiresDatabaseURL(t *testing.T) {
+	disableDotEnvFile(t)
 	t.Setenv("DATABASE_URL", "")
 	if _, err := config.Load(); err == nil {
 		t.Fatal("expected error")
@@ -30,6 +39,7 @@ func TestLoadRequiresDatabaseURL(t *testing.T) {
 }
 
 func TestLoadRejectsDemoModeFalse(t *testing.T) {
+	disableDotEnvFile(t)
 	t.Setenv("DATABASE_URL", "postgres://x")
 	t.Setenv("DEMO_MODE", "false")
 	if _, err := config.Load(); err == nil {
@@ -38,6 +48,7 @@ func TestLoadRejectsDemoModeFalse(t *testing.T) {
 }
 
 func TestLoadRejectsInvalidDemoMode(t *testing.T) {
+	disableDotEnvFile(t)
 	t.Setenv("DATABASE_URL", "postgres://x")
 	t.Setenv("DEMO_MODE", "yes")
 	if _, err := config.Load(); err == nil {
@@ -46,6 +57,7 @@ func TestLoadRejectsInvalidDemoMode(t *testing.T) {
 }
 
 func TestLoadAcceptsDemoModeTrue(t *testing.T) {
+	disableDotEnvFile(t)
 	t.Setenv("DATABASE_URL", "postgres://x")
 	t.Setenv("DEMO_MODE", "true")
 	cfg, err := config.Load()
@@ -58,10 +70,51 @@ func TestLoadAcceptsDemoModeTrue(t *testing.T) {
 }
 
 func TestLoadRejectsInvalidLogLevel(t *testing.T) {
+	disableDotEnvFile(t)
 	t.Setenv("DATABASE_URL", "postgres://x")
 	t.Setenv("LOG_LEVEL", "verbose")
 	if _, err := config.Load(); err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestLoadFromDotEnvFile(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	if err := os.WriteFile(envPath, []byte(
+		"DATABASE_URL=postgres://from-dotenv@localhost:5432/cloudcall?sslmode=disable\n",
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ENV_FILE", envPath)
+	t.Setenv("DATABASE_URL", "")
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DatabaseURL != "postgres://from-dotenv@localhost:5432/cloudcall?sslmode=disable" {
+		t.Fatalf("DatabaseURL = %q", cfg.DatabaseURL)
+	}
+}
+
+func TestLoadDotEnvDoesNotOverrideExistingEnv(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	if err := os.WriteFile(envPath, []byte(
+		"DATABASE_URL=postgres://from-dotenv@localhost:5432/cloudcall?sslmode=disable\n",
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ENV_FILE", envPath)
+	t.Setenv("DATABASE_URL", "postgres://from-shell@localhost:5432/cloudcall?sslmode=disable")
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DatabaseURL != "postgres://from-shell@localhost:5432/cloudcall?sslmode=disable" {
+		t.Fatalf("DatabaseURL = %q", cfg.DatabaseURL)
 	}
 }
 
@@ -70,6 +123,7 @@ func TestLoadAcceptsLogLevels(t *testing.T) {
 		"debug": slog.LevelDebug, "info": slog.LevelInfo, "warn": slog.LevelWarn, "ERROR": slog.LevelError,
 	}
 	for in, lvl := range want {
+		disableDotEnvFile(t)
 		t.Setenv("DATABASE_URL", "postgres://x")
 		t.Setenv("LOG_LEVEL", in)
 		cfg, err := config.Load()

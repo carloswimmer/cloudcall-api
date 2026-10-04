@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+
+	"github.com/joho/godotenv"
 )
 
 type Config struct {
@@ -16,6 +18,7 @@ type Config struct {
 }
 
 func Load() (Config, error) {
+	loadDotEnv()
 	cfg := Config{
 		HTTPAddr:    envOr("HTTP_ADDR", ":8080"),
 		DatabaseURL: os.Getenv("DATABASE_URL"),
@@ -60,4 +63,26 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// loadDotEnv loads optional KEY=value pairs from a .env file into the process
+// environment. Non-empty variables already set in the process are left unchanged
+// so production and shell exports keep precedence. Missing files are ignored.
+func loadDotEnv() {
+	path := strings.TrimSpace(os.Getenv("ENV_FILE"))
+	if path == "" {
+		path = ".env"
+	}
+	envMap, err := godotenv.Read(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return
+		}
+		return
+	}
+	for key, value := range envMap {
+		if strings.TrimSpace(os.Getenv(key)) == "" {
+			_ = os.Setenv(key, value)
+		}
+	}
 }
