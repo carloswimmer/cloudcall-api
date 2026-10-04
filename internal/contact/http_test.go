@@ -264,3 +264,277 @@ func TestListContactsScopedToOrganization(t *testing.T) {
 		t.Fatalf("other org's contacts leaked: %s", raw)
 	}
 }
+
+// send issues a request with an optional JSON body.
+func send(t *testing.T, method, url, body string) (*http.Response, []byte) {
+	t.Helper()
+	var rd io.Reader
+	if body != "" {
+		rd = strings.NewReader(body)
+	}
+	req, err := http.NewRequest(method, url, rd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	raw, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res, raw
+}
+
+type contactBody struct {
+	ID        string  `json:"id"`
+	Name      string  `json:"name"`
+	Phone     string  `json:"phone"`
+	Email     *string `json:"email"`
+	CreatedAt string  `json:"createdAt"`
+	UpdatedAt string  `json:"updatedAt"`
+}
+
+type errorBody struct {
+	Code        string            `json:"code"`
+	FieldErrors map[string]string `json:"fieldErrors"`
+	RequestID   string            `json:"requestId"`
+}
+
+func decodeContact(t *testing.T, raw []byte) contactBody {
+	t.Helper()
+	var c contactBody
+	if err := json.Unmarshal(raw, &c); err != nil {
+		t.Fatalf("%v: %s", err, raw)
+	}
+	return c
+}
+
+func decodeError(t *testing.T, raw []byte) errorBody {
+	t.Helper()
+	var e errorBody
+	if err := json.Unmarshal(raw, &e); err != nil {
+		t.Fatalf("%v: %s", err, raw)
+	}
+	return e
+}
+
+func createContact(t *testing.T, base, body string) contactBody {
+	t.Helper()
+	res, raw := send(t, http.MethodPost, base+"/api/v1/contacts", body)
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("create status %d: %s", res.StatusCode, raw)
+	}
+	return decodeContact(t, raw)
+}
+
+func TestCreateContact(t *testing.T) {
+	srv := newIsolatedServer(t, 0)
+
+	res, raw := send(t, http.MethodPost, srv.URL+"/api/v1/contacts",
+		`{"name":"  Grace Hopper ","phone":"+14155550101","email":"grace@example.com"}`)
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("status %d: %s", res.StatusCode, raw)
+	}
+	c := decodeContact(t, raw)
+	if _, err := uuid.Parse(c.ID); err != nil || c.Name != "Grace Hopper" || c.Phone != "+14155550101" ||
+		c.Email == nil || *c.Email != "grace@example.com" || c.CreatedAt == "" || c.UpdatedAt == "" {
+		t.Fatalf("created %+v", c)
+	}
+	if strings.Contains(string(raw), "organizationId") {
+		t.Fatalf("organizationId leaked: %s", raw)
+	}
+
+	// Email is optional: omitted and null both store no email.
+	for i, body := range []string{
+		`{"name":"No Email","phone":"+14155550102"}`,
+		`{"name":"Null Email","phone":"+14155550103","email":null}`,
+	} {
+		c := createContact(t, srv.URL, body)
+		if c.Email != nil {
+			t.Fatalf("case %d: email %v", i, *c.Email)
+		}
+	}
+
+	_, raw = get(t, srv.URL+"/api/v1/contacts")
+	if b := decodeList(t, raw); b.Total != 3 {
+		t.Fatalf("list after create: %s", raw)
+	}
+}
+
+func TestCreateContactValidation(t *testing.T) {
+	srv := newIsolatedServer(t, 0)
+
+	cases := []struct {
+		name, body string
+		fields     []string
+	}{
+		{"bad phone", `{"name":"A","phone":"12345"}`, []string{"phone"}},
+		{"missing phone", `{"name":"A"}`, []string{"phone"}},
+		{"blank name", `{"name":"  ","phone":"+14155550101"}`, []string{"name"}},
+		{"bad email", `{"name":"A","phone":"+14155550101","email":"nope"}`, []string{"email"}},
+		{"all bad", `{"name":"","phone":"x","email":"y"}`, []string{"name", "phone", "email"}},
+	}
+	for _, tc := range cases {
+		res, raw := send(t, http.MethodPost, srv.URL+"/api/v1/contacts", tc.body)
+		if res.StatusCode != http.StatusBadRequest {
+			t.Fatalf("%s: status %d: %s", tc.name, res.StatusCode, raw)
+		}
+		e := decodeError(t, raw)
+		if e.Code != "validation_error" || e.RequestID == "" {
+			t.Fatalf("%s: %+v", tc.name, e)
+		}
+		for _, f := range tc.fields {
+			if e.FieldErrors[f] == "" {
+				t.Fatalf("%s: missing fieldErrors.%s: %s", tc.name, f, raw)
+			}
+		}
+		if len(e.FieldErrors) != len(tc.fields) {
+			t.Fatalf("%s: unexpected fieldErrors: %s", tc.name, raw)
+		}
+	}
+
+	for _, body := range []string{`not json`, ``, `{"name":1,"phone":"+14155550101"}`} {
+		res, raw := send(t, http.MethodPost, srv.URL+"/api/v1/contacts", body)
+		if res.StatusCode != http.StatusBadRequest || decodeError(t, raw).Code != "validation_error" {
+			t.Fatalf("body %q: status %d: %s", body, res.StatusCode, raw)
+		}
+	}
+}
+
+func TestCreateContactDuplicatePhone(t *testing.T) {
+	srv := newIsolatedServer(t, 0)
+	createContact(t, srv.URL, `{"name":"First","phone":"+14155550101"}`)
+
+	res, raw := send(t, http.MethodPost, srv.URL+"/api/v1/contacts", `{"name":"Second","phone":"+14155550101"}`)
+	if res.StatusCode != http.StatusConflict {
+		t.Fatalf("status %d: %s", res.StatusCode, raw)
+	}
+	if e := decodeError(t, raw); e.Code != "conflict" || e.RequestID == "" {
+		t.Fatalf("error %+v", e)
+	}
+}
+
+func TestPatchContactNameOnlyKeepsPhone(t *testing.T) {
+	srv := newIsolatedServer(t, 0)
+	c := createContact(t, srv.URL, `{"name":"Old Name","phone":"+14155550101","email":"old@example.com"}`)
+
+	res, raw := send(t, http.MethodPatch, srv.URL+"/api/v1/contacts/"+c.ID, `{"name":"New Name"}`)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status %d: %s", res.StatusCode, raw)
+	}
+	u := decodeContact(t, raw)
+	if u.ID != c.ID || u.Name != "New Name" || u.Phone != "+14155550101" ||
+		u.Email == nil || *u.Email != "old@example.com" || u.CreatedAt != c.CreatedAt {
+		t.Fatalf("patched %+v (was %+v)", u, c)
+	}
+	if u.UpdatedAt == c.UpdatedAt {
+		t.Fatalf("updatedAt not changed: %s", raw)
+	}
+}
+
+func TestPatchContactEmail(t *testing.T) {
+	srv := newIsolatedServer(t, 0)
+	c := createContact(t, srv.URL, `{"name":"Mail","phone":"+14155550101","email":"a@example.com"}`)
+	url := srv.URL + "/api/v1/contacts/" + c.ID
+
+	res, raw := send(t, http.MethodPatch, url, `{"email":"b@example.com"}`)
+	if u := decodeContact(t, raw); res.StatusCode != http.StatusOK || u.Email == nil || *u.Email != "b@example.com" {
+		t.Fatalf("set email: %d %s", res.StatusCode, raw)
+	}
+
+	// JSON null clears the email.
+	res, raw = send(t, http.MethodPatch, url, `{"email":null}`)
+	if u := decodeContact(t, raw); res.StatusCode != http.StatusOK || u.Email != nil || u.Name != "Mail" {
+		t.Fatalf("clear email: %d %s", res.StatusCode, raw)
+	}
+	if !strings.Contains(string(raw), `"email":null`) {
+		t.Fatalf("email must serialize as null: %s", raw)
+	}
+
+	// Invalid values are rejected and nothing changes.
+	res, raw = send(t, http.MethodPatch, url, `{"name":"","phone":"bad","email":"bad"}`)
+	e := decodeError(t, raw)
+	if res.StatusCode != http.StatusBadRequest || e.Code != "validation_error" ||
+		e.FieldErrors["name"] == "" || e.FieldErrors["phone"] == "" || e.FieldErrors["email"] == "" {
+		t.Fatalf("invalid patch: %d %s", res.StatusCode, raw)
+	}
+	// An explicit null name or phone is invalid too (they are required columns).
+	for _, body := range []string{`{"name":null}`, `{"phone":null}`} {
+		res, raw = send(t, http.MethodPatch, url, body)
+		if res.StatusCode != http.StatusBadRequest {
+			t.Fatalf("%s: status %d: %s", body, res.StatusCode, raw)
+		}
+	}
+}
+
+func TestPatchContactDuplicatePhone(t *testing.T) {
+	srv := newIsolatedServer(t, 0)
+	createContact(t, srv.URL, `{"name":"One","phone":"+14155550101"}`)
+	two := createContact(t, srv.URL, `{"name":"Two","phone":"+14155550102"}`)
+
+	res, raw := send(t, http.MethodPatch, srv.URL+"/api/v1/contacts/"+two.ID, `{"phone":"+14155550101"}`)
+	if res.StatusCode != http.StatusConflict || decodeError(t, raw).Code != "conflict" {
+		t.Fatalf("status %d: %s", res.StatusCode, raw)
+	}
+}
+
+func TestPatchAndDeleteUnknownContact(t *testing.T) {
+	srv := newIsolatedServer(t, 0)
+
+	for _, id := range []string{uuid.NewString(), "not-a-uuid"} {
+		res, raw := send(t, http.MethodPatch, srv.URL+"/api/v1/contacts/"+id, `{"name":"X"}`)
+		if res.StatusCode != http.StatusNotFound || decodeError(t, raw).Code != "not_found" {
+			t.Fatalf("patch %s: status %d: %s", id, res.StatusCode, raw)
+		}
+		res, raw = send(t, http.MethodDelete, srv.URL+"/api/v1/contacts/"+id, "")
+		if res.StatusCode != http.StatusNotFound || decodeError(t, raw).Code != "not_found" {
+			t.Fatalf("delete %s: status %d: %s", id, res.StatusCode, raw)
+		}
+	}
+}
+
+func TestDeleteContactThenListExcludesIt(t *testing.T) {
+	srv := newIsolatedServer(t, 0)
+	c := createContact(t, srv.URL, `{"name":"Gone","phone":"+14155550101"}`)
+
+	res, raw := send(t, http.MethodDelete, srv.URL+"/api/v1/contacts/"+c.ID, "")
+	if res.StatusCode != http.StatusNoContent || len(raw) != 0 {
+		t.Fatalf("status %d: %s", res.StatusCode, raw)
+	}
+	_, raw = get(t, srv.URL+"/api/v1/contacts")
+	if b := decodeList(t, raw); b.Total != 0 || len(b.Items) != 0 {
+		t.Fatalf("deleted contact still listed: %s", raw)
+	}
+
+	// Second delete is 404; the phone can be reused.
+	res, _ = send(t, http.MethodDelete, srv.URL+"/api/v1/contacts/"+c.ID, "")
+	if res.StatusCode != http.StatusNotFound {
+		t.Fatalf("second delete status %d", res.StatusCode)
+	}
+	createContact(t, srv.URL, `{"name":"Again","phone":"+14155550101"}`)
+}
+
+func TestWritesAreScopedToOrganization(t *testing.T) {
+	srv := newIsolatedServer(t, 0)
+
+	// Ada belongs to the seeded org, not this server's organization.
+	id := db.Contact1ID.String()
+	res, _ := send(t, http.MethodPatch, srv.URL+"/api/v1/contacts/"+id, `{"name":"Hacked"}`)
+	if res.StatusCode != http.StatusNotFound {
+		t.Fatalf("patch status %d", res.StatusCode)
+	}
+	res, _ = send(t, http.MethodDelete, srv.URL+"/api/v1/contacts/"+id, "")
+	if res.StatusCode != http.StatusNotFound {
+		t.Fatalf("delete status %d", res.StatusCode)
+	}
+	_, raw := get(t, newSeededServer(t).URL+"/api/v1/contacts?q=Ada")
+	if b := decodeList(t, raw); b.Total < 1 || b.Items[0].Name != "Ada Lovelace" {
+		t.Fatalf("seed contact changed: %s", raw)
+	}
+}

@@ -47,3 +47,9 @@
 - Comandos: `ruby -ryaml -e "YAML.load_file('api/openapi.yaml')"`
 - Resultado: `api/openapi.yaml` documenta `GET /health/live`, `GET /health/ready`, `GET /api/v1/me`, `GET /api/v1/users`, `PATCH /api/v1/me/presence` e `GET /api/v1/contacts` (query `q`, `page`, `pageSize`, `sort`); rotas futuras (escrita de contatos, chamadas, dashboard, SSE, demo) citadas na descrição, sem paths inventados
 - Pendente: mutações de contatos (Task 9) e extensão do OpenAPI nas tasks seguintes
+
+## Task 9 — criar, editar e remover contatos
+- Conceitos: `INSERT/UPDATE/DELETE … RETURNING` parametrizados e limitados por `organization_id`, `PATCH` parcial com `CASE WHEN $n THEN … ELSE coluna END`, diferença entre campo ausente e `null` em JSON (tipo com `UnmarshalJSON` que registra `Set`), violação de unicidade detectada com `errors.As` para `*pgconn.PgError` (código `23505`) e mapeada para erro de domínio `ErrPhoneTaken` → 409 `conflict`, `PathValue("id")` do `ServeMux`, 204 sem corpo
+- Comandos: `DATABASE_URL=… go test ./internal/contact -count=1`, `go test ./... && go vet ./...`
+- Resultado: `POST /api/v1/contacts` (201), `PATCH /api/v1/contacts/{id}` (200; `email: null` limpa o e-mail) e `DELETE /api/v1/contacts/{id}` (204); `id` desconhecido ou malformado → 404 `not_found`; OpenAPI atualizado
+- Pendente: chamadas, dashboard e SSE

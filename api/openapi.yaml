@@ -3,9 +3,10 @@ info:
   title: CloudCall Desk API
   version: 0.1.0
   description: |
-    Contrato HTTP do backend demo CloudCall Desk (Tasks 2–7).
+    Contrato HTTP do backend demo CloudCall Desk (Tasks 2–9).
 
-    Este documento cobre apenas sondas de saúde, identidade, presença de colegas e busca de contatos.
+    Este documento cobre sondas de saúde, identidade, presença de colegas e contatos
+    (busca, criação, edição parcial e remoção).
     Rotas de tasks futuras ainda não constam neste documento.
 
 servers:
@@ -17,7 +18,7 @@ tags:
   - name: Identity
     description: Usuário demo, organização e colegas.
   - name: Contacts
-    description: Busca e paginação somente leitura de contatos.
+    description: Busca, paginação, criação, edição parcial e remoção de contatos.
 
 paths:
   /health/live:
@@ -255,7 +256,175 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+    post:
+      tags: [Contacts]
+      operationId: createContact
+      summary: Criar contato
+      description: |
+        Cria um contato na organização seed; o cliente nunca envia `organizationId`.
+        `name` é aparado e deve ter 1–120 caracteres. `phone` deve ser E.164 e único na organização
+        (duplicado retorna 409 `conflict`). `email` é opcional; omitido, `null` ou `""` não armazenam e-mail.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateContact"
+            examples:
+              grace:
+                value:
+                  name: Grace Hopper
+                  phone: "+14155550101"
+                  email: grace@example.com
+      responses:
+        "201":
+          description: Contato criado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Contact"
+        "400":
+          description: Erro de validação (`fieldErrors` por campo)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                invalid:
+                  value:
+                    code: validation_error
+                    message: invalid request
+                    fieldErrors:
+                      phone: must be E.164, for example +442071838750
+                      requestId: 550e8400-e29b-41d4-a716-446655440000
+        "409":
+          description: Já existe contato com este telefone na organização
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                code: conflict
+                message: a contact with this phone already exists
+                requestId: 550e8400-e29b-41d4-a716-446655440000
+        "500":
+          description: Erro interno
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/contacts/{id}:
+    patch:
+      tags: [Contacts]
+      operationId: updateContact
+      summary: Editar contato parcialmente
+      description: |
+        Atualiza apenas os campos enviados; os demais permanecem. Enviar `"email": null` (ou `""`)
+        remove o e-mail; omitir `email` o mantém. `name` e `phone` não aceitam `null`.
+        Um telefone já usado por outro contato retorna 409 `conflict`. Um `id` desconhecido,
+        malformado ou de outra organização retorna 404.
+      parameters:
+        - $ref: "#/components/parameters/ContactId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateContact"
+            examples:
+              rename:
+                value:
+                  name: Grace B. Hopper
+              clearEmail:
+                value:
+                  email: null
+      responses:
+        "200":
+          description: Contato atualizado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Contact"
+        "400":
+          description: Erro de validação (`fieldErrors` por campo)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                invalid:
+                  value:
+                    code: validation_error
+                    message: invalid request
+                    fieldErrors:
+                      phone: must be E.164, for example +442071838750
+                      requestId: 550e8400-e29b-41d4-a716-446655440000
+        "404":
+          description: Contato não encontrado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                code: not_found
+                message: contact not found
+                requestId: 550e8400-e29b-41d4-a716-446655440000
+        "409":
+          description: Já existe outro contato com este telefone
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                code: conflict
+                message: a contact with this phone already exists
+                requestId: 550e8400-e29b-41d4-a716-446655440000
+        "500":
+          description: Erro interno
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+    delete:
+      tags: [Contacts]
+      operationId: deleteContact
+      summary: Remover contato
+      description: Remove o contato da organização seed. Um `id` desconhecido ou malformado retorna 404.
+      parameters:
+        - $ref: "#/components/parameters/ContactId"
+      responses:
+        "204":
+          description: Contato removido (sem corpo)
+        "404":
+          description: Contato não encontrado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                code: not_found
+                message: contact not found
+                requestId: 550e8400-e29b-41d4-a716-446655440000
+        "500":
+          description: Erro interno
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
 components:
+  parameters:
+    ContactId:
+      name: id
+      in: path
+      required: true
+      description: Identificador do contato.
+      schema:
+        type: string
+        format: uuid
+
   schemas:
     Error:
       type: object
@@ -268,6 +437,7 @@ components:
             - validation_error
             - version_mismatch
             - not_found
+            - conflict
             - internal_error
         message:
           type: string
@@ -377,3 +547,32 @@ components:
           minimum: 1
           maximum: 100
           description: Tamanho de página usado nesta resposta.
+
+    CreateContact:
+      type: object
+      required: [name, phone]
+      properties:
+        name:
+          type: string
+          maxLength: 120
+          description: Nome do contato; espaços nas pontas são removidos.
+        phone:
+          type: string
+          description: Telefone E.164 (`+` e 8–15 dígitos, sem zero inicial), único por organização.
+        email:
+          type: [string, "null"]
+          description: E-mail opcional; omitido, null ou vazio não armazenam e-mail.
+
+    UpdateContact:
+      type: object
+      description: Todos os campos são opcionais; só os enviados são alterados.
+      properties:
+        name:
+          type: string
+          maxLength: 120
+        phone:
+          type: string
+          description: Telefone E.164, único por organização.
+        email:
+          type: [string, "null"]
+          description: Novo e-mail; `null` (ou vazio) remove o e-mail, omitir o mantém.
