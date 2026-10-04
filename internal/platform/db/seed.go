@@ -14,8 +14,7 @@ var (
 	DemoUserID     = uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
 	Colleague1ID   = uuid.MustParse("cccccccc-cccc-cccc-cccc-cccccccccccc")
 	Colleague2ID   = uuid.MustParse("dddddddd-dddd-dddd-dddd-dddddddddddd")
-	// Contact1ID is reserved for the contacts seed (no contact is inserted yet).
-	Contact1ID = uuid.MustParse("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+	Contact1ID     = uuid.MustParse("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
 )
 
 // Seed inserts the demo organization and users. It is idempotent: existing rows
@@ -50,6 +49,13 @@ func Seed(ctx context.Context, sqlDB *sql.DB) error {
 			ON CONFLICT (id) DO NOTHING`, u.id, OrganizationID, u.name, u.extension); err != nil {
 			return fmt.Errorf("seed user %s: %w", u.extension, err)
 		}
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO contacts (id, organization_id, name, phone, email, created_at, updated_at)
+		VALUES ($1, $2, 'Ada Lovelace', '+442071838750', 'ada@example.com', now(), now())
+		ON CONFLICT (id) DO NOTHING`, Contact1ID, OrganizationID); err != nil {
+		return fmt.Errorf("seed contact: %w", err)
 	}
 	return tx.Commit()
 }

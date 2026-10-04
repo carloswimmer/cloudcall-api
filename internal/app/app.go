@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"cloudcall/internal/contact"
 	"cloudcall/internal/platform/config"
 	"cloudcall/internal/platform/db"
 	"cloudcall/internal/platform/httpx"
@@ -42,6 +43,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	}
 	a := newApp(sqlDB.PingContext, sqlDB.Close)
 	user.NewHandler(&user.Store{DB: sqlDB}, db.OrganizationID, db.DemoUserID).Register(a.mux)
+	contact.NewHandler(&contact.Store{DB: sqlDB}, db.OrganizationID).Register(a.mux)
 	return a, nil
 }
 

@@ -75,6 +75,22 @@ func TestSeedIsIdempotentAndMatchesDemoData(t *testing.T) {
 		t.Fatalf("demo user %q %q %q", uname, ext, presence)
 	}
 
+	var cname, cphone, cemail string
+	var contacts int
+	if err := sqlDB.QueryRowContext(ctx,
+		"SELECT count(*) FROM contacts WHERE organization_id = $1 AND id = $2", db.OrganizationID, db.Contact1ID).
+		Scan(&contacts); err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlDB.QueryRowContext(ctx,
+		"SELECT name, phone, email FROM contacts WHERE id = $1", db.Contact1ID).
+		Scan(&cname, &cphone, &cemail); err != nil {
+		t.Fatal(err)
+	}
+	if contacts != 1 || cname != "Ada Lovelace" || cphone != "+442071838750" || cemail != "ada@example.com" {
+		t.Fatalf("contact %d %q %q %q", contacts, cname, cphone, cemail)
+	}
+
 	for _, id := range []uuid.UUID{db.Colleague1ID, db.Colleague2ID} {
 		var n int
 		if err := sqlDB.QueryRowContext(ctx,

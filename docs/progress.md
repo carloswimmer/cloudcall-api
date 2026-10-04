@@ -35,3 +35,9 @@
 - Comandos: `DATABASE_URL=… go test ./internal/user ./internal/app -count=1`, `go test ./... && go vet ./...`
 - Resultado: `GET /api/v1/me`, `GET /api/v1/users` e `PATCH /api/v1/me/presence` montados em `App.New`; `busy` sem chamada é permitido até a Task 11
 - Pendente: contatos (Task 7), chamadas, SSE, trava de presença durante chamada (Task 11)
+
+## Task 7 — lista de contatos
+- Conceitos: migração `002_contacts.sql` (UNIQUE `(organization_id, phone)` e índice por `(organization_id, name, id)`), validação E.164 (`+` e 8–15 dígitos, sem zero inicial), e-mail opcional, struct genérica `Page[T]` (generics), paginação com `LIMIT/OFFSET` e `COUNT(*)`, busca `ILIKE` por nome ou telefone, `sort` só aceita `name`, erros 400 com `fieldErrors`, `items` sempre `[]` (nunca `null`)
+- Comandos: `go test ./internal/contact -count=1`, `DATABASE_URL=… go test ./... -count=1`, `go vet ./...`
+- Resultado: `GET /api/v1/contacts` (`q`, `page`, `pageSize` padrão 20 e máximo 100, `sort=name`) montado em `App.New`; seed insere `Contact1ID` (Ada Lovelace); o cliente nunca envia `organizationId`
+- Pendente: criar, editar e remover contatos (Task 9)
