@@ -9,6 +9,7 @@ import (
 	"cloudcall/internal/platform/config"
 	"cloudcall/internal/platform/db"
 	"cloudcall/internal/platform/httpx"
+	"cloudcall/internal/user"
 )
 
 type App struct {
@@ -39,7 +40,9 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("seed: %w", err)
 	}
-	return newApp(sqlDB.PingContext, sqlDB.Close), nil
+	a := newApp(sqlDB.PingContext, sqlDB.Close)
+	user.NewHandler(&user.Store{DB: sqlDB}, db.OrganizationID, db.DemoUserID).Register(a.mux)
+	return a, nil
 }
 
 func newApp(ping func(context.Context) error, closeFn func() error) *App {

@@ -29,3 +29,9 @@
 - Comandos: `go test ./internal/platform/db -count=1`, `DATABASE_URL=… go test ./...`, `go vet ./...`
 - Resultado: `db.Migrate`, `db.Seed`, IDs exportados (`OrganizationID`, `DemoUserID`, `Colleague1ID`, `Colleague2ID`, `Contact1ID` reservado); org Northwind e 3 usuários (Alex Rivera 100, Jordan Lee 101, Sam Okafor 102)
 - Pendente: rotas de usuários (Task 6), tabela de contatos (Task 7)
+
+## Task 6 — eu, colegas e presença
+- Conceitos: `PATCH` com concorrência otimista (`UPDATE … WHERE version = $n RETURNING`, zero linhas = conflito 409 `version_mismatch`), erros de domínio (`ErrVersionMismatch`, `ErrNotFound`) mapeados para HTTP no handler, `json:"-"` para não vazar campos internos, o servidor usa os IDs do demo (o cliente nunca envia `userId`/`organizationId`), validação com `fieldErrors`
+- Comandos: `DATABASE_URL=… go test ./internal/user ./internal/app -count=1`, `go test ./... && go vet ./...`
+- Resultado: `GET /api/v1/me`, `GET /api/v1/users` e `PATCH /api/v1/me/presence` montados em `App.New`; `busy` sem chamada é permitido até a Task 11
+- Pendente: contatos (Task 7), chamadas, SSE, trava de presença durante chamada (Task 11)
