@@ -142,6 +142,7 @@ func TestBodyOverLimitIsRejected(t *testing.T) {
 	t.Parallel()
 	big := strings.Repeat("a", int(httpx.MaxBodyBytes)+1)
 	req := httptest.NewRequest(http.MethodPost, "/echo", strings.NewReader(big))
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	newHandler().ServeHTTP(rec, req)
 
@@ -161,6 +162,7 @@ func TestBodyAtLimitIsAccepted(t *testing.T) {
 	t.Parallel()
 	ok := strings.Repeat("a", int(httpx.MaxBodyBytes))
 	req := httptest.NewRequest(http.MethodPost, "/echo", strings.NewReader(ok))
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	newHandler().ServeHTTP(rec, req)
 
@@ -199,5 +201,56 @@ func TestWriteErrorBody(t *testing.T) {
 	}
 	if body.Code != want.Code || body.Message != want.Message || body.RequestID != want.RequestID || body.FieldErrors["phone"] != "required" {
 		t.Fatalf("%+v", body)
+	}
+}
+
+func TestJSONBodyRequiresContentType(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, contentType string
+		wantStatus        int
+	}{
+		{"missing", "", http.StatusBadRequest},
+		{"text plain", "text/plain", http.StatusBadRequest},
+		{"form", "application/x-www-form-urlencoded", http.StatusBadRequest},
+		{"json", "application/json", http.StatusOK},
+		{"json charset", "application/json; charset=utf-8", http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/echo", strings.NewReader(`{"a":1}`))
+			if tc.contentType != "" {
+				req.Header.Set("Content-Type", tc.contentType)
+			}
+			rec := httptest.NewRecorder()
+			newHandler().ServeHTTP(rec, req)
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status %d, want %d", rec.Code, tc.wantStatus)
+			}
+			if tc.wantStatus == http.StatusBadRequest {
+				var body httpx.ErrorBody
+				if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				if body.Code != "validation_error" || body.RequestID == "" || body.FieldErrors["contentType"] == "" {
+					t.Fatalf("%+v", body)
+				}
+			}
+		})
+	}
+}
+
+func TestEmptyBodyAndGetNeedNoContentType(t *testing.T) {
+	t.Parallel()
+	for _, method := range []string{http.MethodPost, http.MethodGet, http.MethodOptions} {
+		path := "/ping"
+		if method == http.MethodPost {
+			path = "/echo"
+		}
+		req := httptest.NewRequest(method, path, nil)
+		rec := httptest.NewRecorder()
+		newHandler().ServeHTTP(rec, req)
+		if rec.Code >= 400 {
+			t.Fatalf("%s %s: status %d", method, path, rec.Code)
+		}
 	}
 }

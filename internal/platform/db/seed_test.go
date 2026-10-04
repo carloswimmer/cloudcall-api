@@ -133,3 +133,42 @@ func TestSeedDoesNotResetExistingPresence(t *testing.T) {
 		t.Fatalf("presence reset to %q", presence)
 	}
 }
+
+func TestSeedSurvivesRecreatedContactPhone(t *testing.T) {
+	sqlDB, ctx := openTestDB(t)
+	cleanupLegacyDemoSeed(t, sqlDB, ctx)
+
+	if err := db.Migrate(ctx, sqlDB); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Seed(ctx, sqlDB); err != nil {
+		t.Fatal(err)
+	}
+
+	otherID := uuid.New()
+	t.Cleanup(func() {
+		_, _ = sqlDB.Exec("DELETE FROM contacts WHERE id = $1", otherID)
+		_ = db.Seed(context.Background(), sqlDB)
+	})
+	if _, err := sqlDB.ExecContext(ctx, "DELETE FROM contacts WHERE id = $1", db.Contact1ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlDB.ExecContext(ctx, `
+		INSERT INTO contacts (id, organization_id, name, phone, created_at, updated_at)
+		VALUES ($1, $2, 'Ada Recreated', '+442071838750', now(), now())`, otherID, db.OrganizationID); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.Seed(ctx, sqlDB); err != nil {
+		t.Fatalf("seed after recreating contact phone: %v", err)
+	}
+	var n int
+	if err := sqlDB.QueryRowContext(ctx,
+		"SELECT count(*) FROM contacts WHERE organization_id = $1 AND phone = '+442071838750'",
+		db.OrganizationID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("rows with seeded phone: %d", n)
+	}
+}

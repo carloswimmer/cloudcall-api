@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"log"
+	"log/slog"
 	"net/http"
+	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -21,6 +23,12 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	level, err := config.ParseLogLevel(cfg.LogLevel)
+	if err != nil {
+		log.Fatal(err)
+	}
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level})))
+
 	startCtx, startCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	application, err := app.New(startCtx, cfg)
 	startCancel()

@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 )
@@ -25,6 +26,10 @@ func Load() (Config, error) {
 	if strings.TrimSpace(cfg.DatabaseURL) == "" {
 		return Config{}, fmt.Errorf("DATABASE_URL is required")
 	}
+	cfg.LogLevel = strings.ToLower(cfg.LogLevel)
+	if _, err := ParseLogLevel(cfg.LogLevel); err != nil {
+		return Config{}, err
+	}
 	if v, ok := os.LookupEnv("DEMO_MODE"); ok && strings.TrimSpace(v) != "" {
 		if strings.EqualFold(strings.TrimSpace(v), "true") {
 			cfg.DemoMode = true
@@ -33,6 +38,21 @@ func Load() (Config, error) {
 		}
 	}
 	return cfg, nil
+}
+
+// ParseLogLevel maps debug, info, warn and error (case-insensitive) to a slog level.
+func ParseLogLevel(s string) (slog.Level, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "debug":
+		return slog.LevelDebug, nil
+	case "info":
+		return slog.LevelInfo, nil
+	case "warn":
+		return slog.LevelWarn, nil
+	case "error":
+		return slog.LevelError, nil
+	}
+	return 0, fmt.Errorf("LOG_LEVEL must be one of debug, info, warn, error")
 }
 
 func envOr(key, fallback string) string {

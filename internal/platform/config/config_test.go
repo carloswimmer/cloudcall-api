@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"log/slog"
 	"testing"
 
 	"cloudcall/internal/platform/config"
@@ -53,5 +54,31 @@ func TestLoadAcceptsDemoModeTrue(t *testing.T) {
 	}
 	if !cfg.DemoMode {
 		t.Fatalf("%+v", cfg)
+	}
+}
+
+func TestLoadRejectsInvalidLogLevel(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://x")
+	t.Setenv("LOG_LEVEL", "verbose")
+	if _, err := config.Load(); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestLoadAcceptsLogLevels(t *testing.T) {
+	want := map[string]slog.Level{
+		"debug": slog.LevelDebug, "info": slog.LevelInfo, "warn": slog.LevelWarn, "ERROR": slog.LevelError,
+	}
+	for in, lvl := range want {
+		t.Setenv("DATABASE_URL", "postgres://x")
+		t.Setenv("LOG_LEVEL", in)
+		cfg, err := config.Load()
+		if err != nil {
+			t.Fatalf("%s: %v", in, err)
+		}
+		got, err := config.ParseLogLevel(cfg.LogLevel)
+		if err != nil || got != lvl {
+			t.Fatalf("%s: got %v err %v, want %v", in, got, err, lvl)
+		}
 	}
 }

@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"mime"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/google/uuid"
@@ -28,10 +28,10 @@ const (
 
 type requestIDKey struct{}
 
-var logger = slog.New(slog.NewJSONHandler(os.Stdout, nil))
-
 // Middleware assigns a request ID, applies CORS for corsOrigin, limits request
-// bodies to MaxBodyBytes and logs one JSON line per request.
+// bodies to MaxBodyBytes, requires Content-Type: application/json on requests
+// that carry a body (POST, PUT, PATCH) and logs one line per request through the
+// default slog logger (configured by LOG_LEVEL in cmd/api).
 func Middleware(corsOrigin string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -55,6 +55,10 @@ func Middleware(corsOrigin string, next http.Handler) http.Handler {
 
 		if r.Method == http.MethodOptions {
 			sw.WriteHeader(http.StatusNoContent)
+		} else if hasBody(r) && !isJSON(r) {
+			WriteError(sw, r, http.StatusBadRequest, "validation_error",
+				"Content-Type must be application/json",
+				map[string]string{"contentType": "must be application/json"})
 		} else {
 			if r.Method != http.MethodGet {
 				r.Body = http.MaxBytesReader(sw, r.Body, MaxBodyBytes)
@@ -66,7 +70,7 @@ func Middleware(corsOrigin string, next http.Handler) http.Handler {
 		if route == "" {
 			route = r.URL.Path
 		}
-		logger.Info("request",
+		slog.Info("request",
 			"requestId", id,
 			"method", r.Method,
 			"route", route,
@@ -74,6 +78,20 @@ func Middleware(corsOrigin string, next http.Handler) http.Handler {
 			"durationMs", float64(time.Since(start).Microseconds())/1000,
 		)
 	})
+}
+
+// hasBody reports whether a method that takes a JSON body actually carries one.
+func hasBody(r *http.Request) bool {
+	switch r.Method {
+	case http.MethodPost, http.MethodPut, http.MethodPatch:
+		return r.ContentLength != 0 && r.Body != nil && r.Body != http.NoBody
+	}
+	return false
+}
+
+func isJSON(r *http.Request) bool {
+	mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	return err == nil && mt == "application/json"
 }
 
 func WriteJSON(w http.ResponseWriter, status int, v any) {

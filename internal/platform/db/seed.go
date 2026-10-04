@@ -17,8 +17,10 @@ var (
 	Contact1ID     = uuid.MustParse("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
 )
 
-// Seed inserts the demo organization and users. It is idempotent: existing rows
-// (matched by primary key) are left untouched, so presence changes survive restarts.
+// Seed inserts the demo organization, users and contact. It is idempotent:
+// existing rows (matched by primary key, or by (organization_id, phone) for the
+// contact) are left untouched, so presence changes and re-created contacts
+// survive restarts.
 func Seed(ctx context.Context, sqlDB *sql.DB) error {
 	tx, err := sqlDB.BeginTx(ctx, nil)
 	if err != nil {
@@ -54,7 +56,7 @@ func Seed(ctx context.Context, sqlDB *sql.DB) error {
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO contacts (id, organization_id, name, phone, email, created_at, updated_at)
 		VALUES ($1, $2, 'Ada Lovelace', '+442071838750', 'ada@example.com', now(), now())
-		ON CONFLICT (id) DO NOTHING`, Contact1ID, OrganizationID); err != nil {
+		ON CONFLICT DO NOTHING`, Contact1ID, OrganizationID); err != nil {
 		return fmt.Errorf("seed contact: %w", err)
 	}
 	return tx.Commit()

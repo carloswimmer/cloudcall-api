@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -55,5 +56,20 @@ func TestMigrateAppliesOnceAndIsIdempotent(t *testing.T) {
 		if !exists {
 			t.Fatalf("table %s missing", table)
 		}
+	}
+}
+
+func TestMigrateCreatesCallsOrgCreatedIndex(t *testing.T) {
+	sqlDB, ctx := openTestDB(t)
+	if err := db.Migrate(ctx, sqlDB); err != nil {
+		t.Fatal(err)
+	}
+	var def string
+	if err := sqlDB.QueryRowContext(ctx,
+		"SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'calls_org_created_idx'").Scan(&def); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(def, "(organization_id, created_at DESC, id DESC)") {
+		t.Fatalf("indexdef %q", def)
 	}
 }
