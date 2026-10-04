@@ -120,3 +120,20 @@ func (a *App) Shutdown() error {
 func (a *App) Handler() http.Handler { return a.mux }
 
 func (a *App) WithMiddleware(origin string) http.Handler { return httpx.Middleware(origin, a.mux) }
+
+// NewServer builds the HTTP server for this app. There is no global WriteTimeout
+// (it would kill SSE streams). http.Server.Shutdown waits for active handlers, and
+// an SSE handler only returns when its stream ends, so the hub is closed as soon
+// as Shutdown starts; otherwise every open stream would hold Shutdown until its
+// deadline.
+func (a *App) NewServer(addr, corsOrigin string) *http.Server {
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           a.WithMiddleware(corsOrigin),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	if a.hub != nil {
+		srv.RegisterOnShutdown(a.hub.Close)
+	}
+	return srv
+}

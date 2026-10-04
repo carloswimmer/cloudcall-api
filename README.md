@@ -29,3 +29,19 @@ docker compose up -d
 go run ./cmd/api
 go test ./...
 ```
+
+## Encerramento gracioso
+
+`SIGINT` (Ctrl+C) e `SIGTERM` encerram a API em até 10 segundos: o servidor HTTP para de aceitar conexões, os streams SSE (`GET /api/v1/events`) são encerrados, e então o hub e o pool do banco são fechados. Veja a decisão em [`docs/adr/001-single-process-sse.md`](docs/adr/001-single-process-sse.md).
+
+## Carga de laboratório (`cmd/seedload`)
+
+Para testar paginação, filtros e dashboard com volume, o comando abaixo insere 1.000 contatos e 10.000 chamadas históricas **terminais** (`ended`, `missed`, `rejected`, `failed`) na organização demo:
+
+```bash
+DATABASE_URL=postgres://cloudcall:cloudcall@localhost:5432/cloudcall?sslmode=disable go run ./cmd/seedload
+```
+
+- Os dados inseridos usam telefones `+1555…`; ao rodar de novo, o comando apaga primeiro as linhas `+1555…` da organização e insere tudo de novo (o resultado é sempre o mesmo). Contatos e chamadas com outros telefones não são tocados.
+- **Não rode isto na inicialização da API**: é uma ferramenta manual de laboratório. A API só executa o seed demo pequeno e idempotente.
+- As chamadas inseridas não têm linhas em `call_transitions` (servem para listas e dashboard, não para o detalhe).

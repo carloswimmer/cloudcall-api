@@ -2,33 +2,69 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"cloudcall/internal/app"
 	"cloudcall/internal/platform/config"
 )
 
+// shutdownTimeout bounds the whole graceful shutdown (HTTP drain plus closing the app).
+const shutdownTimeout = 10 * time.Second
+
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	a, err := app.New(ctx, cfg)
-	cancel()
+	startCtx, startCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	application, err := app.New(startCtx, cfg)
+	startCancel()
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer a.Shutdown()
-	srv := &http.Server{
-		Addr:              cfg.HTTPAddr,
-		Handler:           a.WithMiddleware(cfg.CORSOrigin),
-		ReadHeaderTimeout: 5 * time.Second,
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	httpServer := application.NewServer(cfg.HTTPAddr, cfg.CORSOrigin)
+	serveErr := make(chan error, 1)
+	go func() {
+		log.Printf("listening on %s", cfg.HTTPAddr)
+		serveErr <- httpServer.ListenAndServe()
+	}()
+
+	select {
+	case err := <-serveErr:
+		// The server stopped on its own (for example the port is taken).
+		_ = application.Shutdown()
+		if !errors.Is(err, http.ErrServerClosed) {
+			log.Fatal(err)
+		}
+		return
+	case <-ctx.Done():
 	}
-	log.Printf("listening on %s", cfg.HTTPAddr)
-	if err := srv.ListenAndServe(); err != nil {
-		log.Fatal(err)
+
+	stop() // a second signal now kills the process the default way
+	log.Print("shutting down")
+	shutCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	if err := httpServer.Shutdown(shutCtx); err != nil {
+		log.Printf("http shutdown: %v", err)
+	}
+	// application.Shutdown closes the hub and then the database pool; bound it by the same deadline.
+	done := make(chan error, 1)
+	go func() { done <- application.Shutdown() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			log.Printf("app shutdown: %v", err)
+		}
+	case <-shutCtx.Done():
+		log.Print("app shutdown: timed out")
 	}
 }

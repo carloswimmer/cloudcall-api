@@ -90,3 +90,9 @@
 - Comandos: `go test -race ./internal/event ./internal/call ./internal/user -count=1`, `go test ./internal/app -count=1`
 - Resultado: `GET /api/v1/events` (`text/event-stream`) montado em `App.New`; `Create`/`Apply`/`SetPresence`/`SweepInterrupted` publicam após `Commit`; OpenAPI documenta envelope, snapshot, tombstones e Prefer
 - Pendente: desligamento gracioso, seedload e testes de integração restantes (Task 16)
+
+## Task 16 — encerramento gracioso, seedload e testes de integração restantes
+- Conceitos: `signal.NotifyContext` para SIGINT/SIGTERM, `http.Server.Shutdown` com contexto de 10 s (espera os handlers ativos; um handler SSE só termina quando o stream acaba, então `RegisterOnShutdown` fecha o hub no início do desligamento), ordem de fechamento (HTTP, depois hub, depois pool do banco), `ListenAndServe` em goroutine retornando `http.ErrServerClosed`, inserção em lotes com `INSERT` de várias linhas dentro de uma transação, idempotência por marcador (`phone LIKE '+1555%'`), corridas concorrentes em testes (duas requisições disparadas ao mesmo tempo por um canal `start`)
+- Comandos: `DATABASE_URL=… go test -race ./... -count=1`, `go vet ./...`, `DATABASE_URL=… go run ./cmd/seedload`
+- Resultado: `App.NewServer` monta o servidor com o gancho de desligamento; `cmd/api` encerra limpo em até 10 s; `cmd/seedload` insere 1.000 contatos e 10.000 chamadas terminais; testes: shutdown com SSE aberto, duas respostas `answer` simultâneas (só uma 200, uma transição `to=active`), dois `POST /calls` simultâneos (um 201, um 409), varredura de reinício e `/health/ready`; ADR 001 documenta processo único e hub em memória
+- Pendente: nada (última task)
