@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
+	"cloudcall/internal/event"
 	"cloudcall/internal/user"
 
 	"github.com/google/uuid"
@@ -31,6 +33,28 @@ type Store struct {
 	DB    *sql.DB
 	Users *user.Store
 	Now   func() time.Time
+	// Publisher receives call.updated after every committed call change.
+	// Presence changes made in the same transaction go out through
+	// Users.Publisher. Nil is treated as event.Nop.
+	Publisher event.Publisher
+}
+
+func (s *Store) publisher() event.Publisher {
+	if s.Publisher == nil {
+		return event.Nop{}
+	}
+	return s.Publisher
+}
+
+// publishCall announces the full call as call.updated. Call it only after the
+// transaction that produced c has committed.
+func (s *Store) publishCall(c Call) {
+	env, err := event.NewEnvelope(event.TypeCallUpdated, c.ID, c.Version, toResponse(c))
+	if err != nil {
+		slog.Error("build call event", "error", err)
+		return
+	}
+	s.publisher().Publish(env)
 }
 
 // now returns the store clock at PostgreSQL's microsecond precision, in UTC.
@@ -136,9 +160,15 @@ func (s *Store) Create(ctx context.Context, orgID, ownerID uuid.UUID, direction 
 	if err := insertTransition(ctx, tx, c.ID, Transition{To: status, OccurredAt: now}); err != nil {
 		return Call{}, err
 	}
+	owner, err := s.Users.GetTx(ctx, tx, orgID, ownerID)
+	if err != nil {
+		return Call{}, fmt.Errorf("read owner: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return Call{}, err
 	}
+	s.publishCall(c)
+	s.Users.PublishPresence(owner)
 	return c, nil
 }
 
@@ -186,13 +216,23 @@ func (s *Store) Apply(ctx context.Context, orgID uuid.UUID, callID uuid.UUID, cm
 	if err := insertTransition(ctx, tx, next.ID, tr); err != nil {
 		return Call{}, err
 	}
+	var owner *user.User
 	if IsTerminal(next.Status) {
-		if err := s.Users.RestorePresence(ctx, tx, orgID, next.OwnerUserID); err != nil {
+		if _, err := s.Users.RestorePresence(ctx, tx, orgID, next.OwnerUserID); err != nil {
 			return Call{}, fmt.Errorf("restore presence: %w", err)
 		}
+		u, err := s.Users.GetTx(ctx, tx, orgID, next.OwnerUserID)
+		if err != nil {
+			return Call{}, fmt.Errorf("read owner: %w", err)
+		}
+		owner = &u
 	}
 	if err := tx.Commit(); err != nil {
 		return Call{}, err
+	}
+	s.publishCall(next)
+	if owner != nil {
+		s.Users.PublishPresence(*owner)
 	}
 	return next, nil
 }
@@ -360,6 +400,41 @@ func (s *Store) SetNote(ctx context.Context, orgID, callID uuid.UUID, text strin
 		return Note{}, ErrNotFound
 	}
 	return Note{}, ErrInvalidTransition
+}
+
+// Active returns the organization's dialing, ringing and active calls, oldest first.
+func (s *Store) Active(ctx context.Context, orgID uuid.UUID) ([]Call, error) {
+	return s.queryCalls(ctx,
+		`SELECT `+callColumns+` FROM calls
+		 WHERE organization_id = $1 AND status IN ('dialing', 'ringing', 'active')
+		 ORDER BY created_at, id`, orgID)
+}
+
+// RecentTerminal returns the owner's terminal calls that ended at or after
+// since, newest first, at most limit of them. They become SSE tombstones.
+func (s *Store) RecentTerminal(ctx context.Context, orgID, ownerID uuid.UUID, since time.Time, limit int) ([]Call, error) {
+	return s.queryCalls(ctx,
+		`SELECT `+callColumns+` FROM calls
+		 WHERE organization_id = $1 AND owner_user_id = $2
+		   AND status IN ('ended', 'rejected', 'missed', 'failed') AND ended_at >= $3
+		 ORDER BY ended_at DESC, id DESC LIMIT $4`, orgID, ownerID, since, limit)
+}
+
+func (s *Store) queryCalls(ctx context.Context, query string, args ...any) ([]Call, error) {
+	rows, err := s.DB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	calls := []Call{}
+	for rows.Next() {
+		c, err := scanCall(rows)
+		if err != nil {
+			return nil, err
+		}
+		calls = append(calls, c)
+	}
+	return calls, rows.Err()
 }
 
 // HasNonTerminal reports whether the user has a dialing, ringing or active call.

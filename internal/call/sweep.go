@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"cloudcall/internal/user"
+
 	"github.com/google/uuid"
 )
 
@@ -74,7 +76,8 @@ func (s *Store) SweepInterrupted(ctx context.Context, orgID uuid.UUID) error {
 
 	now := s.now()
 	reason := ReasonSimulationInterrupted
-	for _, c := range leftovers {
+	restored := make([]user.User, 0, len(leftovers))
+	for i, c := range leftovers {
 		from := c.Status
 		c.Status = StatusFailed
 		c.Version++
@@ -89,9 +92,27 @@ func (s *Store) SweepInterrupted(ctx context.Context, orgID uuid.UUID) error {
 		}); err != nil {
 			return err
 		}
-		if err := s.Users.RestorePresence(ctx, tx, orgID, c.OwnerUserID); err != nil {
+		leftovers[i] = c
+		ok, err := s.Users.RestorePresence(ctx, tx, orgID, c.OwnerUserID)
+		if err != nil {
 			return fmt.Errorf("restore presence: %w", err)
 		}
+		if ok {
+			u, err := s.Users.GetTx(ctx, tx, orgID, c.OwnerUserID)
+			if err != nil {
+				return fmt.Errorf("read owner: %w", err)
+			}
+			restored = append(restored, u)
+		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	for _, c := range leftovers {
+		s.publishCall(c)
+	}
+	for _, u := range restored {
+		s.Users.PublishPresence(u)
+	}
+	return nil
 }

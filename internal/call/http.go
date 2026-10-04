@@ -78,6 +78,10 @@ type callResponse struct {
 	DurationSeconds *int64 `json:"durationSeconds,omitempty"`
 }
 
+// Payload is the JSON-ready shape of a call, shared by the REST responses and
+// the SSE snapshot and events so every channel shows the same fields.
+func Payload(c Call) any { return toResponse(c) }
+
 func toResponse(c Call) callResponse {
 	var duration *int64
 	if c.StartedAt != nil && c.EndedAt != nil {

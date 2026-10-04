@@ -1,6 +1,7 @@
 package app_test
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -238,5 +239,60 @@ func TestNewMountsDashboardRoute(t *testing.T) {
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("status %d", res.StatusCode)
+	}
+}
+
+func TestNewMountsEventsStream(t *testing.T) {
+	url := os.Getenv("DATABASE_URL")
+	if url == "" {
+		t.Skip("DATABASE_URL not set")
+	}
+	a, err := app.New(context.Background(), config.Config{DatabaseURL: url, DemoMode: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.Shutdown() })
+	srv := httptest.NewServer(a.WithMiddleware("http://localhost:4200"))
+	t.Cleanup(srv.Close)
+
+	res, err := http.Get(srv.URL + "/api/v1/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK || res.Header.Get("Content-Type") != "text/event-stream" {
+		t.Fatalf("status %d, content type %q", res.StatusCode, res.Header.Get("Content-Type"))
+	}
+
+	// Read only the first block: it must be the snapshot with the three collections.
+	var name, data string
+	sc := bufio.NewScanner(res.Body)
+	for sc.Scan() {
+		line := sc.Text()
+		if line == "" {
+			break
+		}
+		if v, ok := strings.CutPrefix(line, "event: "); ok {
+			name = v
+		}
+		if v, ok := strings.CutPrefix(line, "data: "); ok {
+			data = v
+		}
+	}
+	if name != "snapshot" {
+		t.Fatalf("first event %q", name)
+	}
+	var env struct {
+		Payload struct {
+			Calls      []json.RawMessage `json:"calls"`
+			Users      []json.RawMessage `json:"users"`
+			Tombstones []json.RawMessage `json:"tombstones"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal([]byte(data), &env); err != nil {
+		t.Fatal(err)
+	}
+	if len(env.Payload.Users) < 3 || env.Payload.Calls == nil || env.Payload.Tombstones == nil {
+		t.Fatalf("snapshot payload %s", data)
 	}
 }

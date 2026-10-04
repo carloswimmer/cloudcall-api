@@ -4,12 +4,38 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"log/slog"
+
+	"cloudcall/internal/event"
 
 	"github.com/google/uuid"
 )
 
 // Store reads and updates users and organizations in PostgreSQL.
-type Store struct{ DB *sql.DB }
+type Store struct {
+	DB *sql.DB
+	// Publisher receives a presence.updated envelope after every committed
+	// presence change. Nil is treated as event.Nop.
+	Publisher event.Publisher
+}
+
+func (s *Store) publisher() event.Publisher {
+	if s.Publisher == nil {
+		return event.Nop{}
+	}
+	return s.Publisher
+}
+
+// PublishPresence announces the full user as presence.updated. Call it only
+// after the transaction that produced u has committed.
+func (s *Store) PublishPresence(u User) {
+	env, err := event.NewEnvelope(event.TypePresenceUpdated, u.ID, u.Version, u)
+	if err != nil {
+		slog.Error("build presence event", "error", err)
+		return
+	}
+	s.publisher().Publish(env)
+}
 
 const userColumns = `id, organization_id, name, extension, presence, presence_before_busy, version`
 
@@ -33,6 +59,16 @@ func scanUser(row rowScanner) (User, error) {
 // Get returns one user scoped to the organization.
 func (s *Store) Get(ctx context.Context, orgID, userID uuid.UUID) (User, error) {
 	u, err := scanUser(s.DB.QueryRowContext(ctx,
+		`SELECT `+userColumns+` FROM users WHERE id = $1 AND organization_id = $2`, userID, orgID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return User{}, ErrNotFound
+	}
+	return u, err
+}
+
+// GetTx reads one user inside tx, so a caller sees its own uncommitted changes.
+func (s *Store) GetTx(ctx context.Context, tx *sql.Tx, orgID, userID uuid.UUID) (User, error) {
+	u, err := scanUser(tx.QueryRowContext(ctx,
 		`SELECT `+userColumns+` FROM users WHERE id = $1 AND organization_id = $2`, userID, orgID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return User{}, ErrNotFound
@@ -71,7 +107,11 @@ func (s *Store) SetPresence(ctx context.Context, orgID, userID uuid.UUID, presen
 	if errors.Is(err, sql.ErrNoRows) {
 		return User{}, ErrVersionMismatch
 	}
-	return u, err
+	if err != nil {
+		return User{}, err
+	}
+	s.PublishPresence(u)
+	return u, nil
 }
 
 // Organization returns the organization by ID.
@@ -120,13 +160,18 @@ func (s *Store) LockUser(ctx context.Context, tx *sql.Tx, orgID, userID uuid.UUI
 }
 
 // RestorePresence puts back the presence saved by MarkBusy inside tx, clears
-// presence_before_busy and bumps the version. It is a no-op when nothing was saved.
-func (s *Store) RestorePresence(ctx context.Context, tx *sql.Tx, orgID, userID uuid.UUID) error {
-	_, err := tx.ExecContext(ctx,
+// presence_before_busy and bumps the version. It is a no-op when nothing was
+// saved; the bool is whether a row was updated.
+func (s *Store) RestorePresence(ctx context.Context, tx *sql.Tx, orgID, userID uuid.UUID) (bool, error) {
+	res, err := tx.ExecContext(ctx,
 		`UPDATE users
 		 SET presence = presence_before_busy,
 		     presence_before_busy = NULL,
 		     version = version + 1
 		 WHERE id = $1 AND organization_id = $2 AND presence_before_busy IS NOT NULL`, userID, orgID)
-	return err
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
 }

@@ -84,3 +84,9 @@
 - Comandos: `DATABASE_URL=… go test ./... -count=1`, `go vet ./...`, `ruby -ryaml -e "YAML.load_file('api/openapi.yaml')"`
 - Resultado: `GET /api/v1/dashboard` com `date`, `timezone`, `total`, `inbound`, `outbound`, `missed`, `active`; OpenAPI atualizado com o schema `Dashboard`
 - Pendente: SSE (Task 15)
+
+## Task 15 — hub SSE, snapshot, tombstones e cliente lento
+- Conceitos: hub em memória com fila limitada por cliente (`QueueSize = 32`); snapshot primeiro (registo do cliente, depois `LoadSnapshot`, depois eventos enfileirados); envio não bloqueante — fila cheia desliga só aquele cliente; tombstones (`id`, `version`, `status`) das chamadas terminais recentes do dono demo (15 minutos, máximo 100) unidos aos `call.updated` já na fila; `Prefer(existingVersion, incoming)` é regra do **cliente** (o hub entrega eventos mais velhos); heartbeat injetável; `event` não importa `call` nem `user`
+- Comandos: `go test -race ./internal/event ./internal/call ./internal/user -count=1`, `go test ./internal/app -count=1`
+- Resultado: `GET /api/v1/events` (`text/event-stream`) montado em `App.New`; `Create`/`Apply`/`SetPresence`/`SweepInterrupted` publicam após `Commit`; OpenAPI documenta envelope, snapshot, tombstones e Prefer
+- Pendente: desligamento gracioso, seedload e testes de integração restantes (Task 16)

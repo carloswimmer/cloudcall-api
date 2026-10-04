@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"cloudcall/internal/call"
 	"cloudcall/internal/contact"
 	"cloudcall/internal/dashboard"
+	"cloudcall/internal/event"
 	"cloudcall/internal/platform/config"
 	"cloudcall/internal/platform/db"
 	"cloudcall/internal/platform/httpx"
@@ -19,7 +21,11 @@ type App struct {
 	mux     *http.ServeMux
 	ping    func(context.Context) error
 	closeFn func() error
+	hub     *event.Hub
 }
+
+// heartbeatInterval is how often an idle SSE stream receives a heartbeat.
+const heartbeatInterval = 15 * time.Second
 
 // NewLive builds an app with only the liveness route (no database).
 func NewLive() *App {
@@ -45,12 +51,19 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	}
 	users := &user.Store{DB: sqlDB}
 	calls := &call.Store{DB: sqlDB, Users: users}
+	hub := event.NewHub(snapshotLoader{
+		calls: calls, users: users, orgID: db.OrganizationID, ownerID: db.DemoUserID, now: time.Now,
+	}, heartbeatInterval, time.Now)
+	users.Publisher, calls.Publisher = hub, hub
 	// Calls left over from a previous process cannot continue; fail them before listening.
 	if err := calls.SweepInterrupted(ctx, db.OrganizationID); err != nil {
+		hub.Close()
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("sweep interrupted calls: %w", err)
 	}
 	a := newApp(sqlDB.PingContext, sqlDB.Close)
+	a.hub = hub
+	event.NewHandler(hub).Register(a.mux)
 	user.NewHandler(users, db.OrganizationID, db.DemoUserID).WithCallLock(calls).Register(a.mux)
 	contacts := &contact.Store{DB: sqlDB}
 	contact.NewHandler(contacts, db.OrganizationID).Register(a.mux)
@@ -93,8 +106,11 @@ func (a *App) Ready(ctx context.Context) error {
 	return a.ping(ctx)
 }
 
-// Shutdown closes the database pool.
+// Shutdown closes the SSE hub (cancelling every stream) and then the database pool.
 func (a *App) Shutdown() error {
+	if a.hub != nil {
+		a.hub.Close()
+	}
 	if a.closeFn == nil {
 		return nil
 	}

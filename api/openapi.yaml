@@ -3,12 +3,12 @@ info:
   title: CloudCall Desk API
   version: 0.1.0
   description: |
-    Contrato HTTP do backend demo CloudCall Desk (Tasks 2–14).
+    Contrato HTTP do backend demo CloudCall Desk (Tasks 2–15).
 
     Este documento cobre sondas de saúde, identidade, presença de colegas, contatos
     (busca, criação, edição parcial e remoção), comandos de chamada, histórico, detalhe e notas
-    de chamadas, agregados do dia (dashboard) e rotas do simulador demo.
-    Rotas de tasks futuras (SSE) ainda não constam neste documento.
+    de chamadas, agregados do dia (dashboard), o stream SSE de estado (`GET /api/v1/events`)
+    e rotas do simulador demo.
 
 servers:
   - url: http://localhost:8080
@@ -24,6 +24,8 @@ tags:
     description: Início de chamadas realizadas, ações do usuário, histórico, detalhe e notas.
   - name: Dashboard
     description: Agregados do dia civil no fuso horário da organização.
+  - name: Events
+    description: Stream Server-Sent Events do estado ao vivo (snapshot, chamadas, presença e heartbeat).
   - name: Demo
     description: Simulador de rede (registrado apenas com `DEMO_MODE=true`).
 
@@ -696,6 +698,59 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /api/v1/events:
+    get:
+      tags: [Events]
+      operationId: getEvents
+      summary: Stream SSE do estado ao vivo
+      description: |
+        Abre uma conexão Server-Sent Events. O primeiro evento é sempre `snapshot`
+        com `calls` (chamadas não terminais da organização), `users` (todos os colegas)
+        e `tombstones` (chamadas terminais do usuário demo com `endedAt` nos últimos
+        15 minutos, no máximo 100, unidas às chamadas com `call.updated` já na fila daquela
+        leitura). Os arrays nunca são `null`. Eventos seguintes
+        são `call.updated`, `presence.updated` ou `heartbeat` (a cada 15 segundos).
+
+        Cada quadro segue o formato SSE
+        `id: {eventId}\nevent: {type}\ndata: {envelope JSON}\n\n`.
+        O envelope `snapshot` não traz `entityId` nem `entityVersion`.
+        `call.updated` e `presence.updated` trazem a entidade completa (os mesmos
+        campos do REST) e a `entityVersion` gravada.
+
+        O hub não filtra versões antigas: um `call.updated` com versão menor que a
+        do snapshot ou do tombstone ainda é entregue. O cliente aplica a regra
+        Prefer(`existingVersion`, incoming): descarta o envelope se `entityVersion`
+        for menor que a versão já conhecida daquela entidade (snapshot, tombstone
+        ou evento anterior). Envelopes sem versão (snapshot, heartbeat) são sempre
+        mantidos. Incluir o tombstone no snapshot impede que um cliente correto
+        ressuscite uma chamada encerrada.
+
+        Cada cliente tem uma fila de 32 eventos; se ficar para trás, a conexão é
+        encerrada e deve reconectar para receber um snapshot novo.
+        O cliente nunca envia identificadores de usuário ou organização.
+      responses:
+        "200":
+          description: Stream `text/event-stream`
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              example: no-cache
+            Content-Type:
+              schema:
+                type: string
+              example: text/event-stream
+          content:
+            text/event-stream:
+              schema:
+                $ref: "#/components/schemas/EventEnvelope"
+              example: |
+                id: 550e8400-e29b-41d4-a716-446655440000
+                event: snapshot
+                data: {"eventId":"550e8400-e29b-41d4-a716-446655440000","type":"snapshot","occurredAt":"2026-10-04T10:00:00Z","payload":{"calls":[],"users":[],"tombstones":[]}}
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /api/v1/demo/incoming-call:
     post:
       tags: [Demo]
@@ -1265,3 +1320,76 @@ components:
           type: integer
           minimum: 0
           description: Chamadas não terminais do usuário demo agora, independentemente do dia de criação.
+
+    EventEnvelope:
+      type: object
+      required: [eventId, type, occurredAt, payload]
+      description: |
+        Forma única de cada evento SSE. Snapshot e heartbeat não têm `entityId`
+        nem `entityVersion`. O cliente aplica Prefer para ignorar uma versão mais
+        antiga da mesma entidade; o servidor entrega o evento mesmo assim.
+      properties:
+        eventId:
+          type: string
+          format: uuid
+          description: Identificador único no processo.
+        type:
+          type: string
+          enum: [snapshot, call.updated, presence.updated, heartbeat]
+        occurredAt:
+          type: string
+          format: date-time
+        entityId:
+          type: string
+          format: uuid
+          description: Identificador da chamada ou do usuário; ausente em snapshot e heartbeat.
+        entityVersion:
+          type: integer
+          description: Versão monotônica da entidade; ausente em snapshot e heartbeat.
+        payload:
+          description: |
+            `snapshot` é SnapshotPayload; `call.updated` é Call; `presence.updated`
+            é User; `heartbeat` é um objeto vazio.
+          oneOf:
+            - $ref: "#/components/schemas/SnapshotPayload"
+            - $ref: "#/components/schemas/Call"
+            - $ref: "#/components/schemas/User"
+            - type: object
+
+    SnapshotPayload:
+      type: object
+      required: [calls, users, tombstones]
+      properties:
+        calls:
+          type: array
+          items:
+            $ref: "#/components/schemas/Call"
+          description: Chamadas não terminais da organização. Sempre um array, nunca null.
+        users:
+          type: array
+          items:
+            $ref: "#/components/schemas/User"
+          description: Todos os usuários da organização. Sempre um array, nunca null.
+        tombstones:
+          type: array
+          items:
+            $ref: "#/components/schemas/Tombstone"
+          description: Chamadas terminais recentes do usuário demo. Sempre um array, nunca null.
+
+    Tombstone:
+      type: object
+      required: [id, version, status]
+      description: |
+        Lembra que a chamada `id` já chegou à versão `version` (em geral um estado
+        terminal). O cliente usa Prefer(version, incoming) e descarta um
+        `call.updated` mais antigo, para não ressuscitar a chamada.
+      properties:
+        id:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          minimum: 1
+        status:
+          type: string
+          enum: [ended, rejected, missed, failed]
