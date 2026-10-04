@@ -103,7 +103,7 @@ func TestNext(t *testing.T) {
 		bad("out active reject", out, StatusActive, ActionReject, nil, inv),
 		ok("out active end", out, StatusActive, ActionEnd, nil, StatusEnded),
 		bad("out active connect", out, StatusActive, ActionConnect, nil, inv),
-		bad("out active fail no_answer", out, StatusActive, ActionFail, noAnswer, inv),
+		bad("out active fail no_answer", out, StatusActive, ActionFail, noAnswer, val),
 		ok("out active fail network_error", out, StatusActive, ActionFail, netErr, StatusFailed),
 		bad("out active fail ring_timeout", out, StatusActive, ActionFail, ringTimeout, val),
 		bad("out active fail simulation_interrupted", out, StatusActive, ActionFail, interrupted, val),
@@ -124,7 +124,7 @@ func TestNext(t *testing.T) {
 		ok("in active end", in, StatusActive, ActionEnd, nil, StatusEnded),
 		bad("in active connect", in, StatusActive, ActionConnect, nil, inv),
 		bad("in active fail no_answer", in, StatusActive, ActionFail, noAnswer, val),
-		bad("in active fail ring_timeout", in, StatusActive, ActionFail, ringTimeout, inv),
+		bad("in active fail ring_timeout", in, StatusActive, ActionFail, ringTimeout, val),
 		ok("in active fail network_error", in, StatusActive, ActionFail, netErr, StatusFailed),
 		bad("in active fail simulation_interrupted", in, StatusActive, ActionFail, interrupted, val),
 

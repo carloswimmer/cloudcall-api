@@ -167,6 +167,8 @@ func nextOutbound(from Status, cmd Command) (Status, error) {
 			switch from {
 			case StatusDialing, StatusRinging:
 				return StatusFailed, nil
+			default:
+				return "", ErrValidation
 			}
 		case ReasonNetworkError:
 			return StatusFailed, nil
@@ -204,6 +206,7 @@ func nextInbound(from Status, cmd Command) (Status, error) {
 			if from == StatusRinging {
 				return StatusMissed, nil
 			}
+			return "", ErrValidation
 		case ReasonNetworkError:
 			return StatusFailed, nil
 		default: // no_answer, simulation_interrupted, unknown
