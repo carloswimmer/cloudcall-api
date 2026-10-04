@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"cloudcall/internal/platform/config"
@@ -23,11 +24,20 @@ func NewLive() *App {
 	return a
 }
 
-// New opens the PostgreSQL pool and registers live and ready routes.
+// New opens the PostgreSQL pool, runs migrations and the demo seed, and registers
+// live and ready routes. Any failure is returned so the process never listens.
 func New(ctx context.Context, cfg config.Config) (*App, error) {
 	sqlDB, err := db.Open(ctx, cfg.DatabaseURL)
 	if err != nil {
 		return nil, err
+	}
+	if err := db.Migrate(ctx, sqlDB); err != nil {
+		_ = sqlDB.Close()
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
+	if err := db.Seed(ctx, sqlDB); err != nil {
+		_ = sqlDB.Close()
+		return nil, fmt.Errorf("seed: %w", err)
 	}
 	return newApp(sqlDB.PingContext, sqlDB.Close), nil
 }

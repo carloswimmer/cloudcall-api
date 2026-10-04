@@ -23,3 +23,9 @@
 - Comandos: `go get github.com/jackc/pgx/v5/stdlib`, `docker compose up -d`, `docker compose ps`, `go test ./internal/app ./internal/platform/db -count=1`, `curl localhost:8080/health/ready`
 - Resultado: `db.Open`, `app.New`, `App.Ready`, `App.Shutdown` e `GET /health/ready` (200 `{"status":"ready"}` ou 503 `database unavailable` sem vazar a URL); `main` usa `New`; pgx v5.11.0
 - Pendente: migrações, seed, rotas de domínio, desligamento gracioso (Task 16)
+
+## Task 5 — migrações e seed demo (organização + usuários)
+- Conceitos: migrações SQL embutidas com `//go:embed`, uma transação por arquivo, tabela `schema_migrations`, `pg_advisory_xact_lock` para serializar migradores concorrentes, seed idempotente com `INSERT … ON CONFLICT (id) DO NOTHING` (não reseta presença existente), `New` falha antes de escutar se migrate/seed falhar
+- Comandos: `go test ./internal/platform/db -count=1`, `DATABASE_URL=… go test ./...`, `go vet ./...`
+- Resultado: `db.Migrate`, `db.Seed`, IDs exportados (`OrganizationID`, `DemoUserID`, `Colleague1ID`, `Colleague2ID`, `Contact1ID` reservado); org Northwind e 3 usuários (Alex Rivera 100, Jordan Lee 101, Sam Okafor 102)
+- Pendente: rotas de usuários (Task 6), tabela de contatos (Task 7)

@@ -7,9 +7,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 
 	"cloudcall/internal/app"
 	"cloudcall/internal/platform/config"
+	"cloudcall/internal/platform/db"
 )
 
 func TestHealthLive(t *testing.T) {
@@ -92,5 +94,42 @@ func TestHealthReadyOK(t *testing.T) {
 	}
 	if body.Status != "ready" {
 		t.Fatalf("status %q", body.Status)
+	}
+}
+
+func TestNewMigratesAndSeeds(t *testing.T) {
+	url := os.Getenv("DATABASE_URL")
+	if url == "" {
+		t.Skip("DATABASE_URL not set")
+	}
+	ctx := context.Background()
+	a, err := app.New(ctx, config.Config{DatabaseURL: url, DemoMode: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.Shutdown() })
+
+	sqlDB, err := db.Open(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	var n int
+	if err := sqlDB.QueryRowContext(ctx, "SELECT count(*) FROM users WHERE organization_id = $1", db.OrganizationID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Fatalf("users %d", n)
+	}
+}
+
+func TestNewFailsWhenDatabaseUnreachable(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	a, err := app.New(ctx, config.Config{DatabaseURL: "postgres://x:y@127.0.0.1:1/z?sslmode=disable&connect_timeout=1", DemoMode: true})
+	if err == nil {
+		_ = a.Shutdown()
+		t.Fatal("expected error")
 	}
 }
