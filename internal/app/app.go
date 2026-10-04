@@ -3,6 +3,8 @@ package app
 import (
 	"encoding/json"
 	"net/http"
+
+	"cloudcall/internal/platform/httpx"
 )
 
 type App struct {
@@ -19,3 +21,5 @@ func NewLive() *App {
 }
 
 func (a *App) Handler() http.Handler { return a.mux }
+
+func (a *App) WithMiddleware(origin string) http.Handler { return httpx.Middleware(origin, a.mux) }
