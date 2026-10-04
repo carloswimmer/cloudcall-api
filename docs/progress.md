@@ -53,3 +53,9 @@
 - Comandos: `DATABASE_URL=… go test ./internal/contact -count=1`, `go test ./... && go vet ./...`
 - Resultado: `POST /api/v1/contacts` (201), `PATCH /api/v1/contacts/{id}` (200; `email: null` limpa o e-mail) e `DELETE /api/v1/contacts/{id}` (204); `id` desconhecido ou malformado → 404 `not_found`; OpenAPI atualizado
 - Pendente: chamadas, dashboard e SSE
+
+## Task 10 — máquina de estados de chamada (pura)
+- Conceitos: tabela de transições em Go puro (sem SQL/HTTP) com `switch` explícito por direção, tipos string nomeados como enums (`Status`, `Action`, `Reason`), funções puras que devolvem nova struct por valor (a original não muda), sentinelas de erro comparadas com `errors.Is`, concorrência otimista via `ExpectedVersion`, ponteiros para campos opcionais (`StartedAt`, `EndedAt`, `FailureReason`), testes em tabela com `t.Run` (uma linha por célula das grades de entrada/saída + motivos inválidos + estados terminais)
+- Comandos: `go test ./internal/call -count=1`, `go test ./... && go vet ./...`
+- Resultado: `call.Next(c, cmd, now)` devolve a nova chamada (versão +1, `startedAt` ao entrar em `active`, `endedAt` ao entrar em estado terminal) e o `Transition`; erros `ErrVersionMismatch`, `ErrInvalidTransition`, `ErrValidation`
+- Pendente: persistência (store), rotas HTTP de chamadas e trava de presença (Task 11)
