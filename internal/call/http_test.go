@@ -137,6 +137,12 @@ func TestCreateRejectsBadBodies(t *testing.T) {
 			status, out := e.post(t, "/api/v1/calls", body)
 			wantStatus(t, status, http.StatusBadRequest, out)
 			wantCode(t, out, "validation_error")
+			if name == "both" || name == "neither" {
+				fields, _ := out["fieldErrors"].(map[string]any)
+				if fields["contactId"] == nil || fields["phone"] == nil {
+					t.Fatalf("fieldErrors %v", out["fieldErrors"])
+				}
+			}
 		})
 	}
 	// Same validation on the demo route.
@@ -312,6 +318,25 @@ func TestMissingCallIsNotFound(t *testing.T) {
 			wantStatus(t, status, http.StatusNotFound, body)
 			wantCode(t, body, "not_found")
 		})
+	}
+}
+
+func TestRegisterDoesNotMountDemoRoutes(t *testing.T) {
+	e := newStoreEnv(t)
+	h := call.NewHandler(e.store, &contact.Store{DB: e.db}, e.org, e.owner)
+	mux := http.NewServeMux()
+	h.Register(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	res, err := http.Post(srv.URL+"/api/v1/demo/incoming-call", "application/json",
+		strings.NewReader(`{"phone":"+14155550100"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusNotFound {
+		t.Fatalf("status %d, want 404", res.StatusCode)
 	}
 }
 

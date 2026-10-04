@@ -230,7 +230,7 @@ func (h *Handler) failCall(w http.ResponseWriter, r *http.Request) {
 		fields["expectedVersion"] = "must be a positive integer"
 	}
 	switch req.Reason {
-	case ReasonNoAnswer, ReasonRingTimeout, ReasonNetworkError, ReasonSimulationInterrupted:
+	case ReasonNoAnswer, ReasonRingTimeout, ReasonNetworkError:
 	default:
 		fields["reason"] = "must be one of no_answer, ring_timeout, network_error"
 	}
