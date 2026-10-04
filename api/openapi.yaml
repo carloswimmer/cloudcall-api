@@ -3,34 +3,34 @@ info:
   title: CloudCall Desk API
   version: 0.1.0
   description: |
-    HTTP contract for the CloudCall Desk demo backend (Tasks 2–7).
+    Contrato HTTP do backend demo CloudCall Desk (Tasks 2–7).
 
-    This document covers health probes, identity, colleague presence, and contact search only.
-    Later tasks will add paths that are **not** listed here yet, including contact writes
-    (`POST`, `PATCH`, `DELETE /api/v1/contacts`), calls, dashboard, demo simulation routes,
-    and the SSE stream (`GET /api/v1/events`).
+    Este documento cobre apenas sondas de saúde, identidade, presença de colegas e busca de contatos.
+    Tasks futuras adicionarão paths que **não** estão listados aqui ainda, incluindo escrita de contatos
+    (`POST`, `PATCH`, `DELETE /api/v1/contacts`), chamadas, dashboard, rotas de simulação demo
+    e o stream SSE (`GET /api/v1/events`).
 
 servers:
   - url: http://localhost:8080
 
 tags:
-  - name: Health
-    description: Process and database readiness (outside `/api/v1`).
-  - name: Identity
-    description: Demo user, organization, and colleagues.
-  - name: Contacts
-    description: Read-only contact search and pagination.
+  - name: Saúde
+    description: Prontidão do processo e do banco de dados (fora de `/api/v1`).
+  - name: Identidade
+    description: Usuário demo, organização e colegas.
+  - name: Contatos
+    description: Busca e paginação somente leitura de contatos.
 
 paths:
   /health/live:
     get:
-      tags: [Health]
+      tags: [Saúde]
       operationId: getHealthLive
-      summary: Liveness probe
-      description: Returns 200 when the process is running. Does not check the database.
+      summary: Sonda de liveness
+      description: Retorna 200 quando o processo está em execução. Não verifica o banco de dados.
       responses:
         "200":
-          description: Process is alive
+          description: Processo ativo
           content:
             application/json:
               schema:
@@ -45,13 +45,13 @@ paths:
 
   /health/ready:
     get:
-      tags: [Health]
+      tags: [Saúde]
       operationId: getHealthReady
-      summary: Readiness probe
-      description: Returns 200 when the database pool responds to ping; otherwise 503.
+      summary: Sonda de readiness
+      description: Retorna 200 quando o pool do banco responde ao ping; caso contrário, 503.
       responses:
         "200":
-          description: Ready to serve traffic
+          description: Pronto para atender tráfego
           content:
             application/json:
               schema:
@@ -64,7 +64,7 @@ paths:
               example:
                 status: ready
         "503":
-          description: Database unavailable
+          description: Banco de dados indisponível
           content:
             application/json:
               schema:
@@ -76,27 +76,27 @@ paths:
 
   /api/v1/me:
     get:
-      tags: [Identity]
+      tags: [Identidade]
       operationId: getMe
-      summary: Current demo user and organization
+      summary: Usuário demo e organização atuais
       description: |
-        Returns the seeded demo user, organization settings, and `demoMode: true`.
-        The client never sends user or organization identifiers.
+        Retorna o usuário demo seed, configurações da organização e `demoMode: true`.
+        O cliente nunca envia identificadores de usuário ou organização.
       responses:
         "200":
-          description: Demo identity
+          description: Identidade demo
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Me"
         "404":
-          description: User or organization not found
+          description: Usuário ou organização não encontrados
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
         "500":
-          description: Internal error
+          description: Erro interno
           content:
             application/json:
               schema:
@@ -104,13 +104,13 @@ paths:
 
   /api/v1/users:
     get:
-      tags: [Identity]
+      tags: [Identidade]
       operationId: listUsers
-      summary: Colleagues in the demo organization
-      description: Lists all users in the seeded organization, including the demo user.
+      summary: Colegas na organização demo
+      description: Lista todos os usuários da organização seed, incluindo o usuário demo.
       responses:
         "200":
-          description: Colleague list
+          description: Lista de colegas
           content:
             application/json:
               schema:
@@ -122,7 +122,7 @@ paths:
                     items:
                       $ref: "#/components/schemas/User"
         "500":
-          description: Internal error
+          description: Erro interno
           content:
             application/json:
               schema:
@@ -130,13 +130,13 @@ paths:
 
   /api/v1/me/presence:
     patch:
-      tags: [Identity]
+      tags: [Identidade]
       operationId: patchMyPresence
-      summary: Update demo user presence
+      summary: Atualizar presença do usuário demo
       description: |
-        Optimistic concurrency via `expectedVersion`. Stale version returns 409 `version_mismatch`.
-        Presence lock during an active call is added in a later task; until then `busy` is allowed
-        without a call.
+        Concorrência otimista via `expectedVersion`. Versão obsoleta retorna 409 `version_mismatch`.
+        Bloqueio de presença durante chamada ativa entra em task futura; até lá, `busy` é permitido
+        sem chamada.
       requestBody:
         required: true
         content:
@@ -150,7 +150,7 @@ paths:
                 expectedVersion:
                   type: integer
                   minimum: 1
-                  description: Last known user `version` from a prior GET or PATCH response.
+                  description: Último `version` conhecido do usuário em GET ou PATCH anterior.
             examples:
               offline:
                 value:
@@ -158,13 +158,13 @@ paths:
                   expectedVersion: 1
       responses:
         "200":
-          description: Updated user
+          description: Usuário atualizado
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/User"
         "400":
-          description: Validation error
+          description: Erro de validação
           content:
             application/json:
               schema:
@@ -178,7 +178,7 @@ paths:
                       presence: must be one of available, busy, offline
                     requestId: 550e8400-e29b-41d4-a716-446655440000
         "409":
-          description: Version mismatch
+          description: Conflito de versão
           content:
             application/json:
               schema:
@@ -188,7 +188,7 @@ paths:
                 message: presence version is stale
                 requestId: 550e8400-e29b-41d4-a716-446655440000
         "500":
-          description: Internal error
+          description: Erro interno
           content:
             application/json:
               schema:
@@ -196,28 +196,28 @@ paths:
 
   /api/v1/contacts:
     get:
-      tags: [Contacts]
+      tags: [Contatos]
       operationId: listContacts
-      summary: Search and paginate contacts
+      summary: Buscar e paginar contatos
       description: |
-        Returns contacts for the seeded organization. Search matches name or phone (case-insensitive).
-        Results are ordered by name ascending, then id ascending. `items` is always an array (never null).
+        Retorna contatos da organização seed. A busca corresponde a nome ou telefone (sem distinção de maiúsculas).
+        Resultados ordenados por nome ascendente, depois id ascendente. `items` é sempre um array (nunca null).
       parameters:
         - name: q
           in: query
-          description: Optional search term matched against name or phone.
+          description: Termo de busca opcional em nome ou telefone.
           schema:
             type: string
         - name: page
           in: query
-          description: 1-based page index. Defaults to 1.
+          description: Índice de página base 1. Padrão 1.
           schema:
             type: integer
             minimum: 1
             default: 1
         - name: pageSize
           in: query
-          description: Page size. Defaults to 20; maximum 100.
+          description: Tamanho da página. Padrão 20; máximo 100.
           schema:
             type: integer
             minimum: 1
@@ -225,19 +225,19 @@ paths:
             default: 20
         - name: sort
           in: query
-          description: Sort field. Only `name` is supported when provided.
+          description: Campo de ordenação. Apenas `name` é suportado quando informado.
           schema:
             type: string
             enum: [name]
       responses:
         "200":
-          description: Paginated contacts
+          description: Contatos paginados
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/PageContacts"
         "400":
-          description: Invalid query parameters
+          description: Parâmetros de query inválidos
           content:
             application/json:
               schema:
@@ -251,7 +251,7 @@ paths:
                       pageSize: pageSize must be between 1 and 100
                     requestId: 550e8400-e29b-41d4-a716-446655440000
         "500":
-          description: Internal error
+          description: Erro interno
           content:
             application/json:
               schema:
@@ -265,7 +265,7 @@ components:
       properties:
         code:
           type: string
-          description: Machine-readable error code.
+          description: Código de erro legível por máquina.
           examples:
             - validation_error
             - version_mismatch
@@ -273,16 +273,16 @@ components:
             - internal_error
         message:
           type: string
-          description: Human-readable summary.
+          description: Resumo legível por humanos.
         fieldErrors:
           type: object
           additionalProperties:
             type: string
-          description: Per-field validation messages, when applicable.
+          description: Mensagens de validação por campo, quando aplicável.
         requestId:
           type: string
           format: uuid
-          description: Correlates with the `X-Request-Id` response header.
+          description: Correlaciona com o header de resposta `X-Request-Id`.
 
     Presence:
       type: string
@@ -304,7 +304,7 @@ components:
         version:
           type: integer
           minimum: 1
-          description: Optimistic concurrency token; increments on presence changes.
+          description: Token de concorrência otimista; incrementa em mudanças de presença.
 
     Organization:
       type: object
@@ -317,10 +317,10 @@ components:
           type: string
         brandColor:
           type: string
-          description: CSS color for the organization brand (for example `#1F4E79`).
+          description: Cor CSS da marca da organização (por exemplo `#1F4E79`).
         timezone:
           type: string
-          description: IANA timezone name (for example `Europe/Berlin`).
+          description: Nome de fuso IANA (por exemplo `Europe/Berlin`).
 
     Me:
       type: object
@@ -333,7 +333,7 @@ components:
         demoMode:
           type: boolean
           const: true
-          description: Demo simulation mode is enabled for this deployment.
+          description: Modo de simulação demo está ativo neste deployment.
 
     Contact:
       type: object
@@ -346,10 +346,10 @@ components:
           type: string
         phone:
           type: string
-          description: E.164 phone number (for example `+442071838750`).
+          description: Telefone E.164 (por exemplo `+442071838750`).
         email:
           type: [string, "null"]
-          description: Optional email; omitted or null when not set.
+          description: E-mail opcional; omitido ou null quando não definido.
         createdAt:
           type: string
           format: date-time
@@ -365,17 +365,17 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Contact"
-          description: Always present; empty when no matches.
+          description: Sempre presente; vazio quando não há correspondências.
         total:
           type: integer
           minimum: 0
-          description: Total contacts matching the query (across all pages).
+          description: Total de contatos que correspondem à query (em todas as páginas).
         page:
           type: integer
           minimum: 1
-          description: Current 1-based page index.
+          description: Índice de página atual base 1.
         pageSize:
           type: integer
           minimum: 1
           maximum: 100
-          description: Page size used for this response.
+          description: Tamanho de página usado nesta resposta.

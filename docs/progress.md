@@ -44,6 +44,6 @@
 
 ## Task 8 — OpenAPI da superfície atual
 - Conceitos: OpenAPI 3.1 como contrato HTTP para geração de tipos no Angular, schemas reutilizáveis (`Error`, `Me`, `User`, `Organization`, `Contact`, `PageContacts`), envelope de erro `{ code, message, fieldErrors?, requestId }`, paginação `{ items, total, page, pageSize }`
-- Comandos: `python3 -c "import yaml; yaml.safe_load(open('api/openapi.yaml'))"`
+- Comandos: `ruby -ryaml -e "YAML.load_file('api/openapi.yaml')"`
 - Resultado: `api/openapi.yaml` documenta `GET /health/live`, `GET /health/ready`, `GET /api/v1/me`, `GET /api/v1/users`, `PATCH /api/v1/me/presence` e `GET /api/v1/contacts` (query `q`, `page`, `pageSize`, `sort`); rotas futuras (escrita de contatos, chamadas, dashboard, SSE, demo) citadas na descrição, sem paths inventados
 - Pendente: mutações de contatos (Task 9) e extensão do OpenAPI nas tasks seguintes
