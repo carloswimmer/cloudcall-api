@@ -41,7 +41,7 @@ func main() {
 	select {
 	case err := <-serveErr:
 		// The server stopped on its own (for example the port is taken).
-		_ = application.Shutdown()
+		_ = application.Shutdown(context.Background())
 		if !errors.Is(err, http.ErrServerClosed) {
 			log.Fatal(err)
 		}
@@ -56,15 +56,7 @@ func main() {
 	if err := httpServer.Shutdown(shutCtx); err != nil {
 		log.Printf("http shutdown: %v", err)
 	}
-	// application.Shutdown closes the hub and then the database pool; bound it by the same deadline.
-	done := make(chan error, 1)
-	go func() { done <- application.Shutdown() }()
-	select {
-	case err := <-done:
-		if err != nil {
-			log.Printf("app shutdown: %v", err)
-		}
-	case <-shutCtx.Done():
-		log.Print("app shutdown: timed out")
+	if err := application.Shutdown(shutCtx); err != nil {
+		log.Printf("app shutdown: %v", err)
 	}
 }

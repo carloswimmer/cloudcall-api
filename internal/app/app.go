@@ -107,14 +107,31 @@ func (a *App) Ready(ctx context.Context) error {
 }
 
 // Shutdown closes the SSE hub (cancelling every stream) and then the database pool.
-func (a *App) Shutdown() error {
+// It returns when both steps finish or when ctx is cancelled.
+func (a *App) Shutdown(ctx context.Context) error {
 	if a.hub != nil {
-		a.hub.Close()
+		done := make(chan struct{})
+		go func() {
+			a.hub.Close()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	if a.closeFn == nil {
 		return nil
 	}
-	return a.closeFn()
+	done := make(chan error, 1)
+	go func() { done <- a.closeFn() }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (a *App) Handler() http.Handler { return a.mux }

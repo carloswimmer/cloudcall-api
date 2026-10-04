@@ -76,7 +76,7 @@ func TestHealthReadyOK(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = a.Shutdown() })
+	t.Cleanup(func() { _ = a.Shutdown(context.Background()) })
 	srv := httptest.NewServer(a.Handler())
 	t.Cleanup(srv.Close)
 
@@ -109,7 +109,7 @@ func TestNewMigratesAndSeeds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = a.Shutdown() })
+	t.Cleanup(func() { _ = a.Shutdown(context.Background()) })
 
 	sqlDB, err := db.Open(ctx, url)
 	if err != nil {
@@ -131,7 +131,7 @@ func TestNewFailsWhenDatabaseUnreachable(t *testing.T) {
 	defer cancel()
 	a, err := app.New(ctx, config.Config{DatabaseURL: "postgres://x:y@127.0.0.1:1/z?sslmode=disable&connect_timeout=1", DemoMode: true})
 	if err == nil {
-		_ = a.Shutdown()
+		_ = a.Shutdown(context.Background())
 		t.Fatal("expected error")
 	}
 }
@@ -145,7 +145,7 @@ func TestNewMountsUserRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = a.Shutdown() })
+	t.Cleanup(func() { _ = a.Shutdown(context.Background()) })
 	srv := httptest.NewServer(a.WithMiddleware("http://localhost:4200"))
 	t.Cleanup(srv.Close)
 
@@ -168,7 +168,7 @@ func TestNewMountsContactRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = a.Shutdown() })
+	t.Cleanup(func() { _ = a.Shutdown(context.Background()) })
 	srv := httptest.NewServer(a.WithMiddleware("http://localhost:4200"))
 	t.Cleanup(srv.Close)
 
@@ -198,7 +198,7 @@ func TestNewMountsCallRoutes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { _ = a.Shutdown() })
+		t.Cleanup(func() { _ = a.Shutdown(context.Background()) })
 		srv := httptest.NewServer(a.Handler())
 		t.Cleanup(srv.Close)
 
@@ -228,7 +228,7 @@ func TestNewMountsDashboardRoute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = a.Shutdown() })
+	t.Cleanup(func() { _ = a.Shutdown(context.Background()) })
 	srv := httptest.NewServer(a.WithMiddleware("http://localhost:4200"))
 	t.Cleanup(srv.Close)
 
@@ -251,7 +251,7 @@ func TestNewMountsEventsStream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = a.Shutdown() })
+	t.Cleanup(func() { _ = a.Shutdown(context.Background()) })
 	srv := httptest.NewServer(a.WithMiddleware("http://localhost:4200"))
 	t.Cleanup(srv.Close)
 

@@ -39,7 +39,7 @@ func TestShutdownEndsOpenEventStream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = a.Shutdown() })
+	t.Cleanup(func() { _ = a.Shutdown(context.Background()) })
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -278,7 +278,7 @@ func TestRestartSweepThenReady(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = a.Shutdown() })
+	t.Cleanup(func() { _ = a.Shutdown(context.Background()) })
 	srv := httptest.NewServer(a.Handler())
 	t.Cleanup(srv.Close)
 	res, err := http.Get(srv.URL + "/health/ready")

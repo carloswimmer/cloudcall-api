@@ -47,7 +47,7 @@ func TestReadyAndShutdownDelegate(t *testing.T) {
 	if err := a.Ready(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Shutdown(); err != nil {
+	if err := a.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if !closed {
