@@ -4,8 +4,8 @@ import (
 	"bufio"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -88,13 +88,13 @@ func TestShutdownEndsOpenEventStream(t *testing.T) {
 	}
 }
 
-// intEnv is an isolated organization with one owner and the real call handler,
-// so concurrent tests never touch the shared demo rows.
+// intEnv is an isolated organization with the real call handler (including demo
+// routes). Concurrent tests never touch the shared demo rows that other packages
+// assert on while go test ./... runs packages in parallel.
 type intEnv struct {
 	ctx   context.Context
 	db    *sql.DB
 	store *call.Store
-	users *user.Store
 	org   uuid.UUID
 	owner uuid.UUID
 	srv   *httptest.Server
@@ -139,8 +139,8 @@ func newIntEnv(t *testing.T) *intEnv {
 		_, _ = sqlDB.Exec(`DELETE FROM organizations WHERE id = $1`, e.org)
 	})
 
-	e.users = &user.Store{DB: sqlDB}
-	e.store = &call.Store{DB: sqlDB, Users: e.users}
+	users := &user.Store{DB: sqlDB}
+	e.store = &call.Store{DB: sqlDB, Users: users}
 	h := call.NewHandler(e.store, &contact.Store{DB: sqlDB}, e.org, e.owner)
 	mux := http.NewServeMux()
 	h.Register(mux)
@@ -150,13 +150,32 @@ func newIntEnv(t *testing.T) *intEnv {
 	return e
 }
 
-// raceStatuses fires n identical POSTs at the same instant and returns the statuses.
-func raceStatuses(t *testing.T, n int, url, body string) []int {
+func (e *intEnv) postJSON(t *testing.T, path, body string) (int, map[string]any) {
+	t.Helper()
+	res, err := http.Post(e.srv.URL+path, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var out map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		t.Fatalf("decode %s: %v", path, err)
+	}
+	return res.StatusCode, out
+}
+
+type racedPost struct {
+	status int
+	body   map[string]any
+}
+
+// racePosts fires n identical POSTs at the same instant.
+func racePosts(t *testing.T, n int, url, body string) []racedPost {
 	t.Helper()
 	var (
 		wg    sync.WaitGroup
 		start = make(chan struct{})
-		got   = make([]int, n)
+		got   = make([]racedPost, n)
 		errs  = make([]error, n)
 	)
 	for i := 0; i < n; i++ {
@@ -169,8 +188,13 @@ func raceStatuses(t *testing.T, n int, url, body string) []int {
 				errs[i] = err
 				return
 			}
-			_ = res.Body.Close()
-			got[i] = res.StatusCode
+			defer res.Body.Close()
+			var out map[string]any
+			if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+				errs[i] = err
+				return
+			}
+			got[i] = racedPost{status: res.StatusCode, body: out}
 		}()
 	}
 	close(start)
@@ -183,10 +207,10 @@ func raceStatuses(t *testing.T, n int, url, body string) []int {
 	return got
 }
 
-func countStatus(statuses []int, want int) int {
+func countStatus(results []racedPost, want int) int {
 	n := 0
-	for _, s := range statuses {
-		if s == want {
+	for _, r := range results {
+		if r.status == want {
 			n++
 		}
 	}
@@ -196,27 +220,31 @@ func countStatus(statuses []int, want int) int {
 func TestConcurrentAnswerOnSameInboundCallOnlyOneWins(t *testing.T) {
 	e := newIntEnv(t)
 	for i := 0; i < 10; i++ {
-		inbound, err := e.store.Create(e.ctx, e.org, e.owner, call.DirectionInbound, nil, "Caller", "+14155550101")
+		status, body := e.postJSON(t, "/api/v1/demo/incoming-call", `{"phone":"+14155550101"}`)
+		if status != http.StatusCreated {
+			t.Fatalf("iteration %d: incoming status %d body %v", i, status, body)
+		}
+		id, err := uuid.Parse(body["id"].(string))
 		if err != nil {
-			t.Fatalf("iteration %d: create: %v", i, err)
+			t.Fatalf("iteration %d: id %v", i, body["id"])
 		}
 
-		url := fmt.Sprintf("%s/api/v1/calls/%s/actions", e.srv.URL, inbound.ID)
-		statuses := raceStatuses(t, 2, url, `{"action":"answer","expectedVersion":1}`)
-		if countStatus(statuses, http.StatusOK) != 1 || countStatus(statuses, http.StatusConflict) != 1 {
-			t.Fatalf("iteration %d: statuses %v, want one 200 and one 409", i, statuses)
+		results := racePosts(t, 2, e.srv.URL+"/api/v1/calls/"+id.String()+"/actions",
+			`{"action":"answer","expectedVersion":1}`)
+		if countStatus(results, http.StatusOK) != 1 || countStatus(results, http.StatusConflict) != 1 {
+			t.Fatalf("iteration %d: %+v, want one 200 and one 409", i, results)
 		}
 
 		var toActive int
 		if err := e.db.QueryRowContext(e.ctx,
-			`SELECT count(*) FROM call_transitions WHERE call_id = $1 AND to_status = 'active'`, inbound.ID).Scan(&toActive); err != nil {
+			`SELECT count(*) FROM call_transitions WHERE call_id = $1 AND to_status = 'active'`, id).Scan(&toActive); err != nil {
 			t.Fatal(err)
 		}
 		if toActive != 1 {
 			t.Fatalf("iteration %d: %d transitions to active, want 1", i, toActive)
 		}
 
-		if _, err := e.store.Apply(e.ctx, e.org, inbound.ID, call.Command{Action: call.ActionEnd, ExpectedVersion: 2}); err != nil {
+		if _, err := e.store.Apply(e.ctx, e.org, id, call.Command{Action: call.ActionEnd, ExpectedVersion: 2}); err != nil {
 			t.Fatalf("iteration %d: end: %v", i, err)
 		}
 	}
@@ -225,9 +253,18 @@ func TestConcurrentAnswerOnSameInboundCallOnlyOneWins(t *testing.T) {
 func TestConcurrentCreateCallOnlyOneWins(t *testing.T) {
 	e := newIntEnv(t)
 	for i := 0; i < 10; i++ {
-		statuses := raceStatuses(t, 2, e.srv.URL+"/api/v1/calls", `{"phone":"+14155550100"}`)
-		if countStatus(statuses, http.StatusCreated) != 1 || countStatus(statuses, http.StatusConflict) != 1 {
-			t.Fatalf("iteration %d: statuses %v, want one 201 and one 409", i, statuses)
+		results := racePosts(t, 2, e.srv.URL+"/api/v1/calls", `{"phone":"+14155550100"}`)
+		if countStatus(results, http.StatusCreated) != 1 || countStatus(results, http.StatusConflict) != 1 {
+			t.Fatalf("iteration %d: %+v, want one 201 and one 409", i, results)
+		}
+		var conflictCode string
+		for _, r := range results {
+			if r.status == http.StatusConflict {
+				conflictCode, _ = r.body["code"].(string)
+			}
+		}
+		if conflictCode != "active_call_exists" {
+			t.Fatalf("iteration %d: 409 code %q, want active_call_exists", i, conflictCode)
 		}
 
 		var n int
@@ -253,16 +290,20 @@ func TestConcurrentCreateCallOnlyOneWins(t *testing.T) {
 // runs at startup fails them and frees the owner; the app then reports ready.
 func TestRestartSweepThenReady(t *testing.T) {
 	e := newIntEnv(t)
-	leftover, err := e.store.Create(e.ctx, e.org, e.owner, call.DirectionOutbound, nil, "Leftover", "+14155550100")
+	status, body := e.postJSON(t, "/api/v1/calls", `{"phone":"+14155550100"}`)
+	if status != http.StatusCreated {
+		t.Fatalf("create leftover: %d %v", status, body)
+	}
+	leftover, err := uuid.Parse(body["id"].(string))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("id %v", body["id"])
 	}
 
 	if err := e.store.SweepInterrupted(e.ctx, e.org); err != nil {
 		t.Fatal(err)
 	}
 
-	got, _, _, err := e.store.Get(e.ctx, e.org, leftover.ID)
+	got, _, _, err := e.store.Get(e.ctx, e.org, leftover)
 	if err != nil {
 		t.Fatal(err)
 	}
