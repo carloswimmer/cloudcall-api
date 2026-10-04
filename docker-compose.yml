@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: cloudcall
+      POSTGRES_PASSWORD: cloudcall
+      POSTGRES_DB: cloudcall
+    ports:
+      - "5432:5432"
+    volumes:
+      - cloudcall_pg:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cloudcall -d cloudcall"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  cloudcall_pg:

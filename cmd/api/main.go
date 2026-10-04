@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"time"
@@ -14,9 +15,16 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	a, err := app.New(ctx, cfg)
+	cancel()
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer a.Shutdown()
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           app.NewLive().WithMiddleware(cfg.CORSOrigin),
+		Handler:           a.WithMiddleware(cfg.CORSOrigin),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	log.Printf("listening on %s", cfg.HTTPAddr)
