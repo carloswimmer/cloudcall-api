@@ -1,0 +1,1395 @@
+openapi: 3.1.0
+info:
+  title: CloudCall Desk API
+  version: 0.1.0
+  description: |
+    Contrato HTTP do backend demo CloudCall Desk (Tasks 2–15).
+
+    Este documento cobre sondas de saúde, identidade, presença de colegas, contatos
+    (busca, criação, edição parcial e remoção), comandos de chamada, histórico, detalhe e notas
+    de chamadas, agregados do dia (dashboard), o stream SSE de estado (`GET /api/v1/events`)
+    e rotas do simulador demo.
+
+servers:
+  - url: http://localhost:8080
+
+tags:
+  - name: Health
+    description: Prontidão do processo e do banco de dados (fora de `/api/v1`).
+  - name: Identity
+    description: Usuário demo, organização e colegas.
+  - name: Contacts
+    description: Busca, paginação, criação, edição parcial e remoção de contatos.
+  - name: Calls
+    description: Início de chamadas realizadas, ações do usuário, histórico, detalhe e notas.
+  - name: Dashboard
+    description: Agregados do dia civil no fuso horário da organização.
+  - name: Events
+    description: Stream Server-Sent Events do estado ao vivo (snapshot, chamadas, presença e heartbeat).
+  - name: Demo
+    description: Simulador de rede (registrado apenas com `DEMO_MODE=true`).
+
+paths:
+  /health/live:
+    get:
+      tags: [Health]
+      operationId: getHealthLive
+      summary: Sonda de liveness
+      description: Retorna 200 quando o processo está em execução. Não verifica o banco de dados.
+      responses:
+        "200":
+          description: Processo ativo
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: live
+              example:
+                status: live
+
+  /health/ready:
+    get:
+      tags: [Health]
+      operationId: getHealthReady
+      summary: Sonda de readiness
+      description: Retorna 200 quando o pool do banco responde ao ping; caso contrário, 503.
+      responses:
+        "200":
+          description: Pronto para atender tráfego
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: ready
+              example:
+                status: ready
+        "503":
+          description: Banco de dados indisponível
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                code: internal_error
+                message: database unavailable
+                requestId: 550e8400-e29b-41d4-a716-446655440000
+
+  /api/v1/me:
+    get:
+      tags: [Identity]
+      operationId: getMe
+      summary: Usuário demo e organização atuais
+      description: |
+        Retorna o usuário demo seed, configurações da organização e `demoMode: true`.
+        O cliente nunca envia identificadores de usuário ou organização.
+      responses:
+        "200":
+          description: Identidade demo
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Me"
+        "404":
+          description: Usuário ou organização não encontrados
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Erro interno
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/users:
+    get:
+      tags: [Identity]
+      operationId: listUsers
+      summary: Colegas na organização demo
+      description: Lista todos os usuários da organização seed, incluindo o usuário demo.
+      responses:
+        "200":
+          description: Lista de colegas
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [users]
+                properties:
+                  users:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/User"
+        "500":
+          description: Erro interno
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/me/presence:
+    patch:
+      tags: [Identity]
+      operationId: patchMyPresence
+      summary: Atualizar presença do usuário demo
+      description: |
+        Concorrência otimista via `expectedVersion`. Versão obsoleta retorna 409 `version_mismatch`.
+        Durante uma chamada não terminal (dialing, ringing ou active) a presença fica travada e a
+        resposta é 409 `presence_locked`. Sem chamada, `busy` manual é permitido.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [presence, expectedVersion]
+              properties:
+                presence:
+                  $ref: "#/components/schemas/Presence"
+                expectedVersion:
+                  type: integer
+                  minimum: 1
+                  description: Último `version` conhecido do usuário em GET ou PATCH anterior.
+            examples:
+              offline:
+                value:
+                  presence: offline
+                  expectedVersion: 1
+      responses:
+        "200":
+          description: Usuário atualizado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          description: Erro de validação
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                invalidPresence:
+                  value:
+                    code: validation_error
+                    message: invalid request
+                    fieldErrors:
+                      presence: must be one of available, busy, offline
+                    requestId: 550e8400-e29b-41d4-a716-446655440000
+        "409":
+          description: Conflito de versão
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                code: version_mismatch
+                message: presence version is stale
+                requestId: 550e8400-e29b-41d4-a716-446655440000
+        "500":
+          description: Erro interno
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/contacts:
+    get:
+      tags: [Contacts]
+      operationId: listContacts
+      summary: Buscar e paginar contatos
+      description: |
+        Retorna contatos da organização seed. A busca corresponde a nome ou telefone (sem distinção de maiúsculas).
+        Resultados ordenados por nome ascendente, depois id ascendente. `items` é sempre um array (nunca null).
+      parameters:
+        - name: q
+          in: query
+          description: Termo de busca opcional em nome ou telefone.
+          schema:
+            type: string
+        - name: page
+          in: query
+          description: Índice de página base 1. Padrão 1.
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: pageSize
+          in: query
+          description: Tamanho da página. Padrão 20; máximo 100.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: sort
+          in: query
+          description: Campo de ordenação. Apenas `name` é suportado quando informado.
+          schema:
+            type: string
+            enum: [name]
+      responses:
+        "200":
+          description: Contatos paginados
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PageContacts"
+        "400":
+          description: Parâmetros de query inválidos
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                pageSize:
+                  value:
+                    code: validation_error
+                    message: invalid query
+                    fieldErrors:
+                      pageSize: pageSize must be between 1 and 100
+                    requestId: 550e8400-e29b-41d4-a716-446655440000
+        "500":
+          description: Erro interno
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+    post:
+      tags: [Contacts]
+      operationId: createContact
+      summary: Criar contato
+      description: |
+        Cria um contato na organização seed; o cliente nunca envia `organizationId`.
+        `name` é aparado e deve ter 1–120 caracteres. `phone` deve ser E.164 e único na organização
+        (duplicado retorna 409 `conflict`). `email` é opcional; omitido, `null` ou `""` não armazenam e-mail.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateContact"
+            examples:
+              grace:
+                value:
+                  name: Grace Hopper
+                  phone: "+14155550101"
+                  email: grace@example.com
+      responses:
+        "201":
+          description: Contato criado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Contact"
+        "400":
+          description: Erro de validação (`fieldErrors` por campo)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                invalid:
+                  value:
+                    code: validation_error
+                    message: invalid request
+                    fieldErrors:
+                      phone: must be E.164, for example +442071838750
+                      requestId: 550e8400-e29b-41d4-a716-446655440000
+        "409":
+          description: Já existe contato com este telefone na organização
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                code: conflict
+                message: a contact with this phone already exists
+                requestId: 550e8400-e29b-41d4-a716-446655440000
+        "500":
+          description: Erro interno
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/contacts/{id}:
+    patch:
+      tags: [Contacts]
+      operationId: updateContact
+      summary: Editar contato parcialmente
+      description: |
+        Atualiza apenas os campos enviados; os demais permanecem. Enviar `"email": null` (ou `""`)
+        remove o e-mail; omitir `email` o mantém. `name` e `phone` não aceitam `null`.
+        Um telefone já usado por outro contato retorna 409 `conflict`. Um `id` desconhecido,
+        malformado ou de outra organização retorna 404.
+      parameters:
+        - $ref: "#/components/parameters/ContactId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateContact"
+            examples:
+              rename:
+                value:
+                  name: Grace B. Hopper
+              clearEmail:
+                value:
+                  email: null
+      responses:
+        "200":
+          description: Contato atualizado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Contact"
+        "400":
+          description: Erro de validação (`fieldErrors` por campo)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                invalid:
+                  value:
+                    code: validation_error
+                    message: invalid request
+                    fieldErrors:
+                      phone: must be E.164, for example +442071838750
+                      requestId: 550e8400-e29b-41d4-a716-446655440000
+        "404":
+          description: Contato não encontrado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                code: not_found
+                message: contact not found
+                requestId: 550e8400-e29b-41d4-a716-446655440000
+        "409":
+          description: Já existe outro contato com este telefone
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                code: conflict
+                message: a contact with this phone already exists
+                requestId: 550e8400-e29b-41d4-a716-446655440000
+        "500":
+          description: Erro interno
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+    delete:
+      tags: [Contacts]
+      operationId: deleteContact
+      summary: Remover contato
+      description: |
+        Remove o contato da organização seed. Um `id` desconhecido ou malformado retorna 404.
+        As chamadas do contato não são apagadas: mantêm `peerName` e `peerPhone` (snapshot) e
+        passam a ter `contactId` nulo.
+      parameters:
+        - $ref: "#/components/parameters/ContactId"
+      responses:
+        "204":
+          description: Contato removido (sem corpo)
+        "404":
+          description: Contato não encontrado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                code: not_found
+                message: contact not found
+                requestId: 550e8400-e29b-41d4-a716-446655440000
+        "500":
+          description: Erro interno
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/calls:
+    get:
+      tags: [Calls]
+      operationId: listCalls
+      summary: Histórico de chamadas
+      description: |
+        Lista as chamadas da organização seed, da mais recente para a mais antiga
+        (`createdAt` decrescente, depois `id` decrescente). Todos os filtros informados se combinam com E;
+        uma combinação impossível (por exemplo `status=ended&terminal=false`) retorna uma página vazia
+        com 200, não 400. `items` é sempre um array (nunca null).
+        As chamadas guardam um snapshot de nome e telefone, então continuam no histórico
+        mesmo depois de o contato ser removido (`contactId` passa a ser `null`).
+      parameters:
+        - name: direction
+          in: query
+          description: Filtra pela direção da chamada.
+          schema:
+            $ref: "#/components/schemas/CallDirection"
+        - name: status
+          in: query
+          description: Filtra pelo status atual.
+          schema:
+            $ref: "#/components/schemas/CallStatus"
+        - name: terminal
+          in: query
+          description: |
+            `true` retorna só chamadas em estado terminal (`ended`, `rejected`, `missed`, `failed`);
+            `false` retorna só `dialing`, `ringing` e `active`.
+          schema:
+            type: boolean
+        - name: from
+          in: query
+          description: Limite inferior inclusivo de `createdAt`, em RFC 3339 (normalizado para UTC).
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          description: Limite superior inclusivo de `createdAt`, em RFC 3339 (normalizado para UTC).
+          schema:
+            type: string
+            format: date-time
+        - name: page
+          in: query
+          description: Índice de página base 1. Padrão 1.
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: pageSize
+          in: query
+          description: Tamanho da página. Padrão 20; máximo 100.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        "200":
+          description: Página de chamadas
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PageCalls"
+        "400":
+          description: Parâmetros de query inválidos (`fieldErrors` por parâmetro)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                terminal:
+                  value:
+                    code: validation_error
+                    message: invalid query
+                    fieldErrors:
+                      terminal: must be true or false
+                    requestId: 550e8400-e29b-41d4-a716-446655440000
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    post:
+      tags: [Calls]
+      operationId: createCall
+      summary: Iniciar chamada realizada
+      description: |
+        Cria uma chamada `outbound` em `dialing` para o usuário demo e marca a presença como `busy`.
+        Envie exatamente um entre `contactId` e `phone` (os dois ou nenhum retornam 400).
+        Com `contactId`, o nome e o telefone do contato são copiados para a chamada (snapshot).
+        Com `phone` (E.164), o nome do snapshot é `Unknown`.
+        Um `contactId` inexistente ou de outra organização retorna 404.
+        Se o usuário já tem uma chamada em `dialing`, `ringing` ou `active`, retorna 409 `active_call_exists`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCall"
+            examples:
+              byPhone:
+                value:
+                  phone: "+14155550100"
+              byContact:
+                value:
+                  contactId: eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee
+      responses:
+        "201":
+          description: Chamada criada em `dialing` (versão 1)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Call"
+        "400":
+          $ref: "#/components/responses/CallValidationError"
+        "404":
+          $ref: "#/components/responses/CallNotFound"
+        "409":
+          $ref: "#/components/responses/CallConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/calls/{id}:
+    get:
+      tags: [Calls]
+      operationId: getCall
+      summary: Detalhe de uma chamada
+      description: |
+        Retorna a chamada com a linha do tempo de transições (`transitions`, em ordem cronológica;
+        a primeira tem `from` nulo) e a nota (`note`, nula quando ainda não existe).
+        Um `id` malformado, desconhecido ou de outra organização retorna 404.
+      parameters:
+        - $ref: "#/components/parameters/CallId"
+      responses:
+        "200":
+          description: Chamada com transições e nota
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CallDetail"
+        "404":
+          $ref: "#/components/responses/CallNotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/calls/{id}/note:
+    put:
+      tags: [Calls]
+      operationId: putCallNote
+      summary: Criar ou substituir a nota de uma chamada
+      description: |
+        Upsert da nota da chamada (uma nota por chamada). Só chamadas em estado terminal
+        (`ended`, `rejected`, `missed`, `failed`) aceitam nota; em `dialing`, `ringing` ou `active`
+        a resposta é 409 `invalid_transition`. `text` é obrigatório e tem no máximo 2000 caracteres
+        (texto vazio é aceito); acima disso retorna 400 com `fieldErrors.text`.
+      parameters:
+        - $ref: "#/components/parameters/CallId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PutCallNoteRequest"
+            examples:
+              note:
+                value:
+                  text: Cliente pediu retorno amanhã.
+      responses:
+        "200":
+          description: Nota gravada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CallNote"
+        "400":
+          description: Corpo inválido ou texto maior que 2000 caracteres
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                tooLong:
+                  value:
+                    code: validation_error
+                    message: invalid request
+                    fieldErrors:
+                      text: must be at most 2000 characters
+                    requestId: 550e8400-e29b-41d4-a716-446655440000
+        "404":
+          $ref: "#/components/responses/CallNotFound"
+        "409":
+          description: A chamada ainda não terminou
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                code: invalid_transition
+                message: action is not allowed in the current call state
+                requestId: 550e8400-e29b-41d4-a716-446655440000
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/calls/{id}/actions:
+    post:
+      tags: [Calls]
+      operationId: applyCallAction
+      summary: Aplicar ação do usuário a uma chamada
+      description: |
+        O backend decide a transição, os timestamps e a nova `version`; o cliente nunca grava o status.
+        Chamada `inbound`: `answer` e `reject` valem em `ringing`; `end` vale em `active`.
+        Chamada `outbound`: `end` vale em `dialing`, `ringing` e `active`.
+        `expectedVersion` obsoleto retorna 409 `version_mismatch`; ação ilegal no estado atual
+        (inclusive chamada já terminal) retorna 409 `invalid_transition`.
+      parameters:
+        - $ref: "#/components/parameters/CallId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CallActionRequest"
+            examples:
+              answer:
+                value:
+                  action: answer
+                  expectedVersion: 1
+      responses:
+        "200":
+          description: Chamada atualizada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Call"
+        "400":
+          $ref: "#/components/responses/CallValidationError"
+        "404":
+          $ref: "#/components/responses/CallNotFound"
+        "409":
+          $ref: "#/components/responses/CallConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/dashboard:
+    get:
+      tags: [Dashboard]
+      operationId: getDashboard
+      summary: Agregados do dia da organização
+      description: |
+        Retorna contagens das chamadas criadas no dia civil atual, calculado no fuso horário da
+        organização (`timezone`, `Europe/Berlin` no seed), e não em UTC. `total`, `inbound`,
+        `outbound` e `missed` consideram apenas chamadas com `createdAt` nesse dia;
+        `missed` conta as de status `missed`. `active` é a contagem atual de chamadas não terminais
+        (`dialing`, `ringing` ou `active`) do usuário demo e não se limita ao dia de hoje.
+        O cliente nunca envia identificadores de usuário ou organização.
+      responses:
+        "200":
+          description: Agregados do dia
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dashboard"
+              example:
+                date: "2026-10-04"
+                timezone: Europe/Berlin
+                total: 4
+                inbound: 2
+                outbound: 2
+                missed: 1
+                active: 0
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/events:
+    get:
+      tags: [Events]
+      operationId: getEvents
+      summary: Stream SSE do estado ao vivo
+      description: |
+        Abre uma conexão Server-Sent Events. O primeiro evento é sempre `snapshot`
+        com `calls` (chamadas não terminais da organização), `users` (todos os colegas)
+        e `tombstones` (chamadas terminais do usuário demo com `endedAt` nos últimos
+        15 minutos, no máximo 100, unidas às chamadas com `call.updated` já na fila daquela
+        leitura). Os arrays nunca são `null`. Eventos seguintes
+        são `call.updated`, `presence.updated` ou `heartbeat` (a cada 15 segundos).
+
+        Cada quadro segue o formato SSE
+        `id: {eventId}\nevent: {type}\ndata: {envelope JSON}\n\n`.
+        O envelope `snapshot` não traz `entityId` nem `entityVersion`.
+        `call.updated` e `presence.updated` trazem a entidade completa (os mesmos
+        campos do REST) e a `entityVersion` gravada.
+
+        O hub não filtra versões antigas: um `call.updated` com versão menor que a
+        do snapshot ou do tombstone ainda é entregue. O cliente aplica a regra
+        Prefer(`existingVersion`, incoming): descarta o envelope se `entityVersion`
+        for menor que a versão já conhecida daquela entidade (snapshot, tombstone
+        ou evento anterior). Envelopes sem versão (snapshot, heartbeat) são sempre
+        mantidos. Incluir o tombstone no snapshot impede que um cliente correto
+        ressuscite uma chamada encerrada.
+
+        Cada cliente tem uma fila de 32 eventos; se ficar para trás, a conexão é
+        encerrada e deve reconectar para receber um snapshot novo.
+        O cliente nunca envia identificadores de usuário ou organização.
+      responses:
+        "200":
+          description: Stream `text/event-stream`
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              example: no-cache
+            Content-Type:
+              schema:
+                type: string
+              example: text/event-stream
+          content:
+            text/event-stream:
+              schema:
+                $ref: "#/components/schemas/EventEnvelope"
+              example: |
+                id: 550e8400-e29b-41d4-a716-446655440000
+                event: snapshot
+                data: {"eventId":"550e8400-e29b-41d4-a716-446655440000","type":"snapshot","occurredAt":"2026-10-04T10:00:00Z","payload":{"calls":[],"users":[],"tombstones":[]}}
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/demo/incoming-call:
+    post:
+      tags: [Demo]
+      operationId: demoIncomingCall
+      summary: Simular chamada recebida
+      description: |
+        Disponível só com `DEMO_MODE=true`. Mesmo corpo e mesmas regras de `POST /api/v1/calls`,
+        mas cria uma chamada `inbound` em `ringing`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCall"
+            examples:
+              byPhone:
+                value:
+                  phone: "+14155550101"
+      responses:
+        "201":
+          description: Chamada criada em `ringing` (versão 1)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Call"
+        "400":
+          $ref: "#/components/responses/CallValidationError"
+        "404":
+          $ref: "#/components/responses/CallNotFound"
+        "409":
+          $ref: "#/components/responses/CallConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/demo/calls/{id}/connect:
+    post:
+      tags: [Demo]
+      operationId: demoConnectCall
+      summary: Simular progresso da rede em chamada realizada
+      description: |
+        Disponível só com `DEMO_MODE=true`. Em chamada `outbound`, avança `dialing` para `ringing`
+        e depois `ringing` para `active`. Em chamada `inbound` retorna 409 `invalid_transition`.
+      parameters:
+        - $ref: "#/components/parameters/CallId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExpectedVersionRequest"
+            examples:
+              first:
+                value:
+                  expectedVersion: 1
+      responses:
+        "200":
+          description: Chamada atualizada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Call"
+        "400":
+          $ref: "#/components/responses/CallValidationError"
+        "404":
+          $ref: "#/components/responses/CallNotFound"
+        "409":
+          $ref: "#/components/responses/CallConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/demo/calls/{id}/fail:
+    post:
+      tags: [Demo]
+      operationId: demoFailCall
+      summary: Simular falha de rede ou tempo esgotado
+      description: |
+        Disponível só com `DEMO_MODE=true`. Motivos aceitos por direção:
+        `outbound` aceita `no_answer` (em `dialing` ou `ringing`) e `network_error`, e termina em `failed`;
+        `inbound` aceita `ring_timeout` (em `ringing`), que termina em `missed`, e `network_error`, que termina em `failed`.
+        Motivo incompatível com a direção ou o estado, e o motivo reservado `simulation_interrupted`
+        (usado só pela varredura de inicialização), retornam 400.
+      parameters:
+        - $ref: "#/components/parameters/CallId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FailCallRequest"
+            examples:
+              missed:
+                value:
+                  expectedVersion: 1
+                  reason: ring_timeout
+      responses:
+        "200":
+          description: Chamada terminal (`failed` ou `missed`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Call"
+        "400":
+          $ref: "#/components/responses/CallValidationError"
+        "404":
+          $ref: "#/components/responses/CallNotFound"
+        "409":
+          $ref: "#/components/responses/CallConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+components:
+  parameters:
+    ContactId:
+      name: id
+      in: path
+      required: true
+      description: Identificador do contato.
+      schema:
+        type: string
+        format: uuid
+    CallId:
+      name: id
+      in: path
+      required: true
+      description: Identificador da chamada. Um valor malformado, desconhecido ou de outra organização retorna 404.
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    CallValidationError:
+      description: Erro de validação (`fieldErrors` por campo quando aplicável)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          examples:
+            both:
+              value:
+                code: validation_error
+                message: send exactly one of contactId or phone
+                fieldErrors:
+                  contactId: exactly one of contactId or phone is required
+                  phone: exactly one of contactId or phone is required
+                requestId: 550e8400-e29b-41d4-a716-446655440000
+            reason:
+              value:
+                code: validation_error
+                message: invalid request
+                fieldErrors:
+                  reason: is not valid for this call
+                requestId: 550e8400-e29b-41d4-a716-446655440000
+    CallNotFound:
+      description: Chamada ou contato não encontrado nesta organização
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            code: not_found
+            message: call not found
+            requestId: 550e8400-e29b-41d4-a716-446655440000
+    CallConflict:
+      description: |
+        Conflito. `code` é `active_call_exists` (já há chamada não terminal),
+        `version_mismatch` (`expectedVersion` obsoleto) ou `invalid_transition` (comando ilegal no estado atual).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          examples:
+            activeCallExists:
+              value:
+                code: active_call_exists
+                message: a call is already in progress
+                requestId: 550e8400-e29b-41d4-a716-446655440000
+            versionMismatch:
+              value:
+                code: version_mismatch
+                message: call version is stale
+                requestId: 550e8400-e29b-41d4-a716-446655440000
+            invalidTransition:
+              value:
+                code: invalid_transition
+                message: action is not allowed in the current call state
+                requestId: 550e8400-e29b-41d4-a716-446655440000
+    InternalError:
+      description: Erro interno
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    Error:
+      type: object
+      required: [code, message, requestId]
+      properties:
+        code:
+          type: string
+          description: Código de erro legível por máquina.
+          examples:
+            - validation_error
+            - version_mismatch
+            - active_call_exists
+            - invalid_transition
+            - not_found
+            - conflict
+            - internal_error
+        message:
+          type: string
+          description: Resumo legível por humanos.
+        fieldErrors:
+          type: object
+          additionalProperties:
+            type: string
+          description: Mensagens de validação por campo, quando aplicável.
+        requestId:
+          type: string
+          format: uuid
+          description: Correlaciona com o header de resposta `X-Request-Id`.
+
+    Presence:
+      type: string
+      enum: [available, busy, offline]
+
+    User:
+      type: object
+      required: [id, name, extension, presence, version]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        extension:
+          type: string
+        presence:
+          $ref: "#/components/schemas/Presence"
+        version:
+          type: integer
+          minimum: 1
+          description: Token de concorrência otimista; incrementa em mudanças de presença.
+
+    Organization:
+      type: object
+      required: [id, name, brandColor, timezone]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        brandColor:
+          type: string
+          description: Cor CSS da marca da organização (por exemplo `#1F4E79`).
+        timezone:
+          type: string
+          description: Nome de fuso IANA (por exemplo `Europe/Berlin`).
+
+    Me:
+      type: object
+      required: [user, organization, demoMode]
+      properties:
+        user:
+          $ref: "#/components/schemas/User"
+        organization:
+          $ref: "#/components/schemas/Organization"
+        demoMode:
+          type: boolean
+          const: true
+          description: Modo de simulação demo está ativo neste deployment.
+
+    Contact:
+      type: object
+      required: [id, name, phone, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        phone:
+          type: string
+          description: Telefone E.164 (por exemplo `+442071838750`).
+        email:
+          type: [string, "null"]
+          description: E-mail opcional; omitido ou null quando não definido.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    PageContacts:
+      type: object
+      required: [items, total, page, pageSize]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Contact"
+          description: Sempre presente; vazio quando não há correspondências.
+        total:
+          type: integer
+          minimum: 0
+          description: Total de contatos que correspondem à query (em todas as páginas).
+        page:
+          type: integer
+          minimum: 1
+          description: Índice de página atual base 1.
+        pageSize:
+          type: integer
+          minimum: 1
+          maximum: 100
+          description: Tamanho de página usado nesta resposta.
+
+    CreateContact:
+      type: object
+      required: [name, phone]
+      properties:
+        name:
+          type: string
+          maxLength: 120
+          description: Nome do contato; espaços nas pontas são removidos.
+        phone:
+          type: string
+          description: Telefone E.164 (`+` e 8–15 dígitos, sem zero inicial), único por organização.
+        email:
+          type: [string, "null"]
+          description: E-mail opcional; omitido, null ou vazio não armazenam e-mail.
+
+    UpdateContact:
+      type: object
+      description: Todos os campos são opcionais; só os enviados são alterados.
+      properties:
+        name:
+          type: string
+          maxLength: 120
+        phone:
+          type: string
+          description: Telefone E.164, único por organização.
+        email:
+          type: [string, "null"]
+          description: Novo e-mail; `null` (ou vazio) remove o e-mail, omitir o mantém.
+
+    CallDirection:
+      type: string
+      enum: [inbound, outbound]
+
+    CallStatus:
+      type: string
+      enum: [dialing, ringing, active, ended, rejected, missed, failed]
+      description: |
+        `dialing`, `ringing` e `active` são não terminais; `ended`, `rejected`, `missed` e `failed` são terminais.
+
+    CallFailureReason:
+      type: string
+      enum: [no_answer, ring_timeout, network_error, simulation_interrupted]
+      description: |
+        `simulation_interrupted` é gravado só pela varredura de inicialização e nunca é aceito como entrada.
+
+    Call:
+      type: object
+      required: [id, contactId, peerName, peerPhone, direction, status, version, createdAt, startedAt, endedAt, failureReason]
+      properties:
+        id:
+          type: string
+          format: uuid
+        contactId:
+          type: [string, "null"]
+          format: uuid
+          description: Nulo quando a chamada foi feita só por telefone ou o contato foi removido.
+        peerName:
+          type: string
+          description: Nome copiado do contato na criação (ou `Unknown`); não muda se o contato for editado.
+        peerPhone:
+          type: string
+          description: Telefone E.164 copiado na criação.
+        direction:
+          $ref: "#/components/schemas/CallDirection"
+        status:
+          $ref: "#/components/schemas/CallStatus"
+        version:
+          type: integer
+          minimum: 1
+          description: Token de concorrência otimista; incrementa em cada transição.
+        createdAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: [string, "null"]
+          format: date-time
+          description: Momento em que a chamada ficou `active`.
+        endedAt:
+          type: [string, "null"]
+          format: date-time
+          description: Momento em que a chamada chegou a um estado terminal.
+        failureReason:
+          oneOf:
+            - $ref: "#/components/schemas/CallFailureReason"
+            - type: "null"
+        durationSeconds:
+          type: integer
+          minimum: 0
+          description: |
+            Segundos inteiros (truncados) entre `startedAt` e `endedAt`. Só aparece quando os dois existem;
+            chamadas que nunca ficaram `active` (rejeitadas, perdidas, falhas antes de conectar) não têm o campo.
+
+    CallTransition:
+      type: object
+      required: [from, to, occurredAt, reason]
+      properties:
+        from:
+          oneOf:
+            - $ref: "#/components/schemas/CallStatus"
+            - type: "null"
+          description: Status anterior; nulo na criação da chamada.
+        to:
+          $ref: "#/components/schemas/CallStatus"
+        occurredAt:
+          type: string
+          format: date-time
+        reason:
+          oneOf:
+            - $ref: "#/components/schemas/CallFailureReason"
+            - type: "null"
+          description: Motivo, preenchido só nas transições causadas por falha.
+
+    CallNote:
+      type: object
+      required: [text, updatedAt]
+      properties:
+        text:
+          type: string
+          maxLength: 2000
+        updatedAt:
+          type: string
+          format: date-time
+
+    CallDetail:
+      description: Todos os campos de `Call`, mais a linha do tempo e a nota.
+      allOf:
+        - $ref: "#/components/schemas/Call"
+        - type: object
+          required: [transitions, note]
+          properties:
+            transitions:
+              type: array
+              items:
+                $ref: "#/components/schemas/CallTransition"
+              description: Em ordem cronológica; sempre presente.
+            note:
+              oneOf:
+                - $ref: "#/components/schemas/CallNote"
+                - type: "null"
+              description: Nula quando a chamada ainda não tem nota.
+
+    PageCalls:
+      type: object
+      required: [items, total, page, pageSize]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Call"
+          description: Sempre presente; vazio quando não há correspondências.
+        total:
+          type: integer
+          minimum: 0
+          description: Total de chamadas que correspondem aos filtros (em todas as páginas).
+        page:
+          type: integer
+          minimum: 1
+        pageSize:
+          type: integer
+          minimum: 1
+          maximum: 100
+
+    PutCallNoteRequest:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
+          maxLength: 2000
+          description: Texto da nota (até 2000 caracteres). Substitui a nota anterior.
+
+    CreateCall:
+      type: object
+      description: Envie exatamente um entre `contactId` e `phone`.
+      properties:
+        contactId:
+          type: string
+          format: uuid
+          description: Contato da organização a chamar.
+        phone:
+          type: string
+          description: Telefone E.164 (`+` e 8–15 dígitos, sem zero inicial) de um número fora da agenda.
+      oneOf:
+        - required: [contactId]
+        - required: [phone]
+
+    CallActionRequest:
+      type: object
+      required: [action, expectedVersion]
+      properties:
+        action:
+          type: string
+          enum: [answer, reject, end]
+        expectedVersion:
+          type: integer
+          minimum: 1
+          description: Último `version` conhecido da chamada.
+
+    ExpectedVersionRequest:
+      type: object
+      required: [expectedVersion]
+      properties:
+        expectedVersion:
+          type: integer
+          minimum: 1
+          description: Último `version` conhecido da chamada.
+
+    FailCallRequest:
+      type: object
+      required: [expectedVersion, reason]
+      properties:
+        expectedVersion:
+          type: integer
+          minimum: 1
+        reason:
+          type: string
+          enum: [no_answer, ring_timeout, network_error]
+          description: Motivo da falha simulada. `simulation_interrupted` é rejeitado com 400.
+
+    Dashboard:
+      type: object
+      required: [date, timezone, total, inbound, outbound, missed, active]
+      properties:
+        date:
+          type: string
+          format: date
+          description: Data civil de hoje no fuso horário da organização (`YYYY-MM-DD`).
+        timezone:
+          type: string
+          description: Nome IANA do fuso horário da organização.
+          examples: [Europe/Berlin]
+        total:
+          type: integer
+          minimum: 0
+          description: Chamadas criadas hoje (qualquer direção e status).
+        inbound:
+          type: integer
+          minimum: 0
+          description: Chamadas recebidas criadas hoje.
+        outbound:
+          type: integer
+          minimum: 0
+          description: Chamadas realizadas criadas hoje.
+        missed:
+          type: integer
+          minimum: 0
+          description: Chamadas com status `missed` criadas hoje.
+        active:
+          type: integer
+          minimum: 0
+          description: Chamadas não terminais do usuário demo agora, independentemente do dia de criação.
+
+    EventEnvelope:
+      type: object
+      required: [eventId, type, occurredAt, payload]
+      description: |
+        Forma única de cada evento SSE. Snapshot e heartbeat não têm `entityId`
+        nem `entityVersion`. O cliente aplica Prefer para ignorar uma versão mais
+        antiga da mesma entidade; o servidor entrega o evento mesmo assim.
+      properties:
+        eventId:
+          type: string
+          format: uuid
+          description: Identificador único no processo.
+        type:
+          type: string
+          enum: [snapshot, call.updated, presence.updated, heartbeat]
+        occurredAt:
+          type: string
+          format: date-time
+        entityId:
+          type: string
+          format: uuid
+          description: Identificador da chamada ou do usuário; ausente em snapshot e heartbeat.
+        entityVersion:
+          type: integer
+          description: Versão monotônica da entidade; ausente em snapshot e heartbeat.
+        payload:
+          description: |
+            `snapshot` é SnapshotPayload; `call.updated` é Call; `presence.updated`
+            é User; `heartbeat` é um objeto vazio.
+          oneOf:
+            - $ref: "#/components/schemas/SnapshotPayload"
+            - $ref: "#/components/schemas/Call"
+            - $ref: "#/components/schemas/User"
+            - type: object
+
+    SnapshotPayload:
+      type: object
+      required: [calls, users, tombstones]
+      properties:
+        calls:
+          type: array
+          items:
+            $ref: "#/components/schemas/Call"
+          description: Chamadas não terminais da organização. Sempre um array, nunca null.
+        users:
+          type: array
+          items:
+            $ref: "#/components/schemas/User"
+          description: Todos os usuários da organização. Sempre um array, nunca null.
+        tombstones:
+          type: array
+          items:
+            $ref: "#/components/schemas/Tombstone"
+          description: Chamadas terminais recentes do usuário demo. Sempre um array, nunca null.
+
+    Tombstone:
+      type: object
+      required: [id, version, status]
+      description: |
+        Lembra que a chamada `id` já chegou à versão `version` (em geral um estado
+        terminal). O cliente usa Prefer(version, incoming) e descarta um
+        `call.updated` mais antigo, para não ressuscitar a chamada.
+      properties:
+        id:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          minimum: 1
+        status:
+          type: string
+          enum: [ended, rejected, missed, failed]
