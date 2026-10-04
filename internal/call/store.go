@@ -254,6 +254,114 @@ func (s *Store) Get(ctx context.Context, orgID, callID uuid.UUID) (Call, []Trans
 	return c, transitions, note, nil
 }
 
+// ListFilter narrows List. Every non-nil field is ANDed; nil means "any".
+// From and To bound created_at and are both inclusive.
+type ListFilter struct {
+	Direction *Direction
+	Status    *Status
+	Terminal  *bool
+	From      *time.Time
+	To        *time.Time
+}
+
+// listWhere is shared by the count and the page query. A combination that can
+// never match (for example status=ended with terminal=false) simply yields no rows.
+const listWhere = `organization_id = $1
+	AND ($2::text IS NULL OR direction = $2)
+	AND ($3::text IS NULL OR status = $3)
+	AND ($4::boolean IS NULL OR (status IN ('ended', 'rejected', 'missed', 'failed')) = $4)
+	AND ($5::timestamptz IS NULL OR created_at >= $5)
+	AND ($6::timestamptz IS NULL OR created_at <= $6)`
+
+// List returns one page of the organization's calls, newest first (created_at
+// DESC, id DESC), plus the total number of calls matching the filter. The caller
+// validates limit and offset (see contact.ParsePage).
+func (s *Store) List(ctx context.Context, orgID uuid.UUID, f ListFilter, limit, offset int) ([]Call, int, error) {
+	var (
+		direction sql.NullString
+		status    sql.NullString
+		terminal  sql.NullBool
+		from      sql.NullTime
+		to        sql.NullTime
+	)
+	if f.Direction != nil {
+		direction = sql.NullString{String: string(*f.Direction), Valid: true}
+	}
+	if f.Status != nil {
+		status = sql.NullString{String: string(*f.Status), Valid: true}
+	}
+	if f.Terminal != nil {
+		terminal = sql.NullBool{Bool: *f.Terminal, Valid: true}
+	}
+	if f.From != nil {
+		from = sql.NullTime{Time: *f.From, Valid: true}
+	}
+	if f.To != nil {
+		to = sql.NullTime{Time: *f.To, Valid: true}
+	}
+
+	var total int
+	if err := s.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM calls WHERE `+listWhere,
+		orgID, direction, status, terminal, from, to).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count calls: %w", err)
+	}
+
+	rows, err := s.DB.QueryContext(ctx,
+		`SELECT `+callColumns+` FROM calls WHERE `+listWhere+`
+		 ORDER BY created_at DESC, id DESC LIMIT $7 OFFSET $8`,
+		orgID, direction, status, terminal, from, to, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list calls: %w", err)
+	}
+	defer rows.Close()
+	calls := []Call{}
+	for rows.Next() {
+		c, err := scanCall(rows)
+		if err != nil {
+			return nil, 0, fmt.Errorf("scan call: %w", err)
+		}
+		calls = append(calls, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("list calls: %w", err)
+	}
+	return calls, total, nil
+}
+
+// SetNote creates or replaces the note of a call. Only a terminal call may have
+// a note: a non-terminal one yields ErrInvalidTransition and an unknown one
+// ErrNotFound. The status check and the upsert are one statement, and a terminal
+// status never changes back, so there is no window between them.
+func (s *Store) SetNote(ctx context.Context, orgID, callID uuid.UUID, text string) (Note, error) {
+	n := Note{CallID: callID}
+	err := s.DB.QueryRowContext(ctx,
+		`INSERT INTO call_notes (call_id, text, updated_at)
+		 SELECT id, $3, $4 FROM calls
+		 WHERE id = $1 AND organization_id = $2 AND status IN ('ended', 'rejected', 'missed', 'failed')
+		 ON CONFLICT (call_id) DO UPDATE SET text = EXCLUDED.text, updated_at = EXCLUDED.updated_at
+		 RETURNING text, updated_at`,
+		callID, orgID, text, s.now()).Scan(&n.Text, &n.UpdatedAt)
+	if err == nil {
+		n.UpdatedAt = n.UpdatedAt.UTC()
+		return n, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return Note{}, fmt.Errorf("upsert note: %w", err)
+	}
+
+	// No row was written: either the call does not exist here or it is not terminal.
+	var exists bool
+	if err := s.DB.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM calls WHERE id = $1 AND organization_id = $2)`,
+		callID, orgID).Scan(&exists); err != nil {
+		return Note{}, err
+	}
+	if !exists {
+		return Note{}, ErrNotFound
+	}
+	return Note{}, ErrInvalidTransition
+}
+
 // HasNonTerminal reports whether the user has a dialing, ringing or active call.
 func (s *Store) HasNonTerminal(ctx context.Context, orgID, userID uuid.UUID) (bool, error) {
 	var has bool

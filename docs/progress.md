@@ -71,3 +71,9 @@
 - Comandos: `DATABASE_URL=… go test ./... -count=1`, `go vet ./...`, `ruby -ryaml -e "YAML.load_file('api/openapi.yaml')"`
 - Resultado: `POST /api/v1/calls` (201 `dialing`), `POST /api/v1/calls/{id}/actions` (`answer|reject|end`), `POST /api/v1/demo/incoming-call` (201 `ringing`), `POST /api/v1/demo/calls/{id}/connect` e `/fail`; contato desconhecido → 404 `not_found`; `GET /calls`, notas, dashboard e SSE seguem fora; OpenAPI atualizado com `Call`, `CreateCall` e respostas reutilizáveis
 - Pendente: histórico, detalhe e notas (Task 13), dashboard, SSE (Task 15)
+
+## Task 13 — histórico, detalhe, notas e invariante de remoção de contato
+- Conceitos: listagem com filtros opcionais combinados por `AND` em um único SQL (`$n::tipo IS NULL OR coluna = $n`, parâmetros `sql.Null*`), ordenação estável `created_at DESC, id DESC`, `from`/`to` em RFC 3339 normalizados para UTC e inclusivos, combinação impossível (`status=ended&terminal=false`) devolve página vazia e não 400, paginação reaproveitando `contact.ParsePage` (sem overflow de `OFFSET`), upsert de nota com `INSERT … SELECT … WHERE status terminal … ON CONFLICT DO UPDATE` (a checagem de estado e a escrita são um só comando), `ErrInvalidTransition` → 409 para nota em chamada não terminal, limite de 2000 caracteres contado em runes (igual ao `char_length` do banco), `durationSeconds` calculado na borda HTTP com `EndedAt.Sub(*StartedAt) / time.Second` e `omitempty` em ponteiro, `ON DELETE SET NULL` mantém o histórico: apagar o contato zera `contactId` mas preserva `peerName`/`peerPhone`
+- Comandos: `DATABASE_URL=… go test ./... -count=1`, `go vet ./...`, `ruby -ryaml -e "YAML.load_file('api/openapi.yaml')"`
+- Resultado: `GET /api/v1/calls` (filtros `direction`, `status`, `terminal`, `from`, `to`, `page`, `pageSize`), `GET /api/v1/calls/{id}` com `transitions` e `note`, `PUT /api/v1/calls/{id}/note`; OpenAPI atualizado
+- Pendente: dashboard (Task 14), SSE (Task 15)

@@ -3,11 +3,12 @@ info:
   title: CloudCall Desk API
   version: 0.1.0
   description: |
-    Contrato HTTP do backend demo CloudCall Desk (Tasks 2–12).
+    Contrato HTTP do backend demo CloudCall Desk (Tasks 2–13).
 
     Este documento cobre sondas de saúde, identidade, presença de colegas, contatos
-    (busca, criação, edição parcial e remoção), comandos de chamada e rotas do simulador demo.
-    Rotas de tasks futuras (histórico, notas, dashboard, SSE) ainda não constam neste documento.
+    (busca, criação, edição parcial e remoção), comandos de chamada, histórico, detalhe e notas
+    de chamadas e rotas do simulador demo.
+    Rotas de tasks futuras (dashboard, SSE) ainda não constam neste documento.
 
 servers:
   - url: http://localhost:8080
@@ -20,7 +21,7 @@ tags:
   - name: Contacts
     description: Busca, paginação, criação, edição parcial e remoção de contatos.
   - name: Calls
-    description: Início de chamadas realizadas e ações do usuário sobre uma chamada.
+    description: Início de chamadas realizadas, ações do usuário, histórico, detalhe e notas.
   - name: Demo
     description: Simulador de rede (registrado apenas com `DEMO_MODE=true`).
 
@@ -395,7 +396,10 @@ paths:
       tags: [Contacts]
       operationId: deleteContact
       summary: Remover contato
-      description: Remove o contato da organização seed. Um `id` desconhecido ou malformado retorna 404.
+      description: |
+        Remove o contato da organização seed. Um `id` desconhecido ou malformado retorna 404.
+        As chamadas do contato não são apagadas: mantêm `peerName` e `peerPhone` (snapshot) e
+        passam a ter `contactId` nulo.
       parameters:
         - $ref: "#/components/parameters/ContactId"
       responses:
@@ -419,6 +423,86 @@ paths:
                 $ref: "#/components/schemas/Error"
 
   /api/v1/calls:
+    get:
+      tags: [Calls]
+      operationId: listCalls
+      summary: Histórico de chamadas
+      description: |
+        Lista as chamadas da organização seed, da mais recente para a mais antiga
+        (`createdAt` decrescente, depois `id` decrescente). Todos os filtros informados se combinam com E;
+        uma combinação impossível (por exemplo `status=ended&terminal=false`) retorna uma página vazia
+        com 200, não 400. `items` é sempre um array (nunca null).
+        As chamadas guardam um snapshot de nome e telefone, então continuam no histórico
+        mesmo depois de o contato ser removido (`contactId` passa a ser `null`).
+      parameters:
+        - name: direction
+          in: query
+          description: Filtra pela direção da chamada.
+          schema:
+            $ref: "#/components/schemas/CallDirection"
+        - name: status
+          in: query
+          description: Filtra pelo status atual.
+          schema:
+            $ref: "#/components/schemas/CallStatus"
+        - name: terminal
+          in: query
+          description: |
+            `true` retorna só chamadas em estado terminal (`ended`, `rejected`, `missed`, `failed`);
+            `false` retorna só `dialing`, `ringing` e `active`.
+          schema:
+            type: boolean
+        - name: from
+          in: query
+          description: Limite inferior inclusivo de `createdAt`, em RFC 3339 (normalizado para UTC).
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          description: Limite superior inclusivo de `createdAt`, em RFC 3339 (normalizado para UTC).
+          schema:
+            type: string
+            format: date-time
+        - name: page
+          in: query
+          description: Índice de página base 1. Padrão 1.
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: pageSize
+          in: query
+          description: Tamanho da página. Padrão 20; máximo 100.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        "200":
+          description: Página de chamadas
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PageCalls"
+        "400":
+          description: Parâmetros de query inválidos (`fieldErrors` por parâmetro)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                terminal:
+                  value:
+                    code: validation_error
+                    message: invalid query
+                    fieldErrors:
+                      terminal: must be true or false
+                    requestId: 550e8400-e29b-41d4-a716-446655440000
+        "500":
+          $ref: "#/components/responses/InternalError"
+
     post:
       tags: [Calls]
       operationId: createCall
@@ -456,6 +540,87 @@ paths:
           $ref: "#/components/responses/CallNotFound"
         "409":
           $ref: "#/components/responses/CallConflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/calls/{id}:
+    get:
+      tags: [Calls]
+      operationId: getCall
+      summary: Detalhe de uma chamada
+      description: |
+        Retorna a chamada com a linha do tempo de transições (`transitions`, em ordem cronológica;
+        a primeira tem `from` nulo) e a nota (`note`, nula quando ainda não existe).
+        Um `id` malformado, desconhecido ou de outra organização retorna 404.
+      parameters:
+        - $ref: "#/components/parameters/CallId"
+      responses:
+        "200":
+          description: Chamada com transições e nota
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CallDetail"
+        "404":
+          $ref: "#/components/responses/CallNotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/calls/{id}/note:
+    put:
+      tags: [Calls]
+      operationId: putCallNote
+      summary: Criar ou substituir a nota de uma chamada
+      description: |
+        Upsert da nota da chamada (uma nota por chamada). Só chamadas em estado terminal
+        (`ended`, `rejected`, `missed`, `failed`) aceitam nota; em `dialing`, `ringing` ou `active`
+        a resposta é 409 `invalid_transition`. `text` é obrigatório e tem no máximo 2000 caracteres
+        (texto vazio é aceito); acima disso retorna 400 com `fieldErrors.text`.
+      parameters:
+        - $ref: "#/components/parameters/CallId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PutCallNoteRequest"
+            examples:
+              note:
+                value:
+                  text: Cliente pediu retorno amanhã.
+      responses:
+        "200":
+          description: Nota gravada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CallNote"
+        "400":
+          description: Corpo inválido ou texto maior que 2000 caracteres
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                tooLong:
+                  value:
+                    code: validation_error
+                    message: invalid request
+                    fieldErrors:
+                      text: must be at most 2000 characters
+                    requestId: 550e8400-e29b-41d4-a716-446655440000
+        "404":
+          $ref: "#/components/responses/CallNotFound"
+        "409":
+          description: A chamada ainda não terminou
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                code: invalid_transition
+                message: action is not allowed in the current call state
+                requestId: 550e8400-e29b-41d4-a716-446655440000
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -902,6 +1067,91 @@ components:
           oneOf:
             - $ref: "#/components/schemas/CallFailureReason"
             - type: "null"
+        durationSeconds:
+          type: integer
+          minimum: 0
+          description: |
+            Segundos inteiros (truncados) entre `startedAt` e `endedAt`. Só aparece quando os dois existem;
+            chamadas que nunca ficaram `active` (rejeitadas, perdidas, falhas antes de conectar) não têm o campo.
+
+    CallTransition:
+      type: object
+      required: [from, to, occurredAt, reason]
+      properties:
+        from:
+          oneOf:
+            - $ref: "#/components/schemas/CallStatus"
+            - type: "null"
+          description: Status anterior; nulo na criação da chamada.
+        to:
+          $ref: "#/components/schemas/CallStatus"
+        occurredAt:
+          type: string
+          format: date-time
+        reason:
+          oneOf:
+            - $ref: "#/components/schemas/CallFailureReason"
+            - type: "null"
+          description: Motivo, preenchido só nas transições causadas por falha.
+
+    CallNote:
+      type: object
+      required: [text, updatedAt]
+      properties:
+        text:
+          type: string
+          maxLength: 2000
+        updatedAt:
+          type: string
+          format: date-time
+
+    CallDetail:
+      description: Todos os campos de `Call`, mais a linha do tempo e a nota.
+      allOf:
+        - $ref: "#/components/schemas/Call"
+        - type: object
+          required: [transitions, note]
+          properties:
+            transitions:
+              type: array
+              items:
+                $ref: "#/components/schemas/CallTransition"
+              description: Em ordem cronológica; sempre presente.
+            note:
+              oneOf:
+                - $ref: "#/components/schemas/CallNote"
+                - type: "null"
+              description: Nula quando a chamada ainda não tem nota.
+
+    PageCalls:
+      type: object
+      required: [items, total, page, pageSize]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Call"
+          description: Sempre presente; vazio quando não há correspondências.
+        total:
+          type: integer
+          minimum: 0
+          description: Total de chamadas que correspondem aos filtros (em todas as páginas).
+        page:
+          type: integer
+          minimum: 1
+        pageSize:
+          type: integer
+          minimum: 1
+          maximum: 100
+
+    PutCallNoteRequest:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
+          maxLength: 2000
+          description: Texto da nota (até 2000 caracteres). Substitui a nota anterior.
 
     CreateCall:
       type: object

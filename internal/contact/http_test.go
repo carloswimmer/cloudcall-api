@@ -15,9 +15,11 @@ import (
 	"testing"
 	"time"
 
+	"cloudcall/internal/call"
 	"cloudcall/internal/contact"
 	"cloudcall/internal/platform/db"
 	"cloudcall/internal/platform/httpx"
+	"cloudcall/internal/user"
 
 	"github.com/google/uuid"
 )
@@ -518,6 +520,103 @@ func TestDeleteContactThenListExcludesIt(t *testing.T) {
 		t.Fatalf("second delete status %d", res.StatusCode)
 	}
 	createContact(t, srv.URL, `{"name":"Again","phone":"+14155550101"}`)
+}
+
+// TestDeleteContactKeepsCallSnapshots checks the history invariant: deleting a
+// contact never deletes or rewrites calls, it only clears contactId.
+func TestDeleteContactKeepsCallSnapshots(t *testing.T) {
+	sqlDB, ctx := openDB(t)
+	orgID, ownerID := uuid.New(), uuid.New()
+	if _, err := sqlDB.ExecContext(ctx,
+		`INSERT INTO organizations (id, name, brand_color, timezone) VALUES ($1, 'Snapshot Test Org', '#1F4E79', 'Europe/Berlin')`,
+		orgID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlDB.ExecContext(ctx,
+		`INSERT INTO users (id, organization_id, name, extension, presence, version)
+		 VALUES ($1, $2, 'Snapshot Tester', '902', 'available', 1)`, ownerID, orgID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = sqlDB.Exec(`DELETE FROM call_notes WHERE call_id IN (SELECT id FROM calls WHERE organization_id = $1)`, orgID)
+		_, _ = sqlDB.Exec(`DELETE FROM call_transitions WHERE call_id IN (SELECT id FROM calls WHERE organization_id = $1)`, orgID)
+		_, _ = sqlDB.Exec(`DELETE FROM calls WHERE organization_id = $1`, orgID)
+		_, _ = sqlDB.Exec(`DELETE FROM contacts WHERE organization_id = $1`, orgID)
+		_, _ = sqlDB.Exec(`DELETE FROM users WHERE organization_id = $1`, orgID)
+		_, _ = sqlDB.Exec(`DELETE FROM organizations WHERE id = $1`, orgID)
+	})
+
+	contacts := &contact.Store{DB: sqlDB}
+	mux := http.NewServeMux()
+	contact.NewHandler(contacts, orgID).Register(mux)
+	call.NewHandler(&call.Store{DB: sqlDB, Users: &user.Store{DB: sqlDB}}, contacts, orgID, ownerID).Register(mux)
+	srv := httptest.NewServer(httpx.Middleware("http://localhost:4200", mux))
+	t.Cleanup(srv.Close)
+
+	c := createContact(t, srv.URL, `{"name":"Grace Hopper","phone":"+14155550101"}`)
+	res, raw := send(t, http.MethodPost, srv.URL+"/api/v1/calls", `{"contactId":"`+c.ID+`"}`)
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("create call status %d: %s", res.StatusCode, raw)
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(raw, &created); err != nil {
+		t.Fatal(err)
+	}
+	res, raw = send(t, http.MethodPost, srv.URL+"/api/v1/calls/"+created.ID+"/actions", `{"action":"end","expectedVersion":1}`)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("end call status %d: %s", res.StatusCode, raw)
+	}
+	res, raw = send(t, http.MethodPut, srv.URL+"/api/v1/calls/"+created.ID+"/note", `{"text":"kept"}`)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("note status %d: %s", res.StatusCode, raw)
+	}
+
+	res, raw = send(t, http.MethodDelete, srv.URL+"/api/v1/contacts/"+c.ID, "")
+	if res.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete contact status %d: %s", res.StatusCode, raw)
+	}
+
+	type callBody struct {
+		ContactID *string `json:"contactId"`
+		PeerName  string  `json:"peerName"`
+		PeerPhone string  `json:"peerPhone"`
+		Status    string  `json:"status"`
+		Note      *struct {
+			Text string `json:"text"`
+		} `json:"note"`
+		Transitions []json.RawMessage `json:"transitions"`
+	}
+	check := func(label string, b callBody) {
+		t.Helper()
+		if b.ContactID != nil || b.PeerName != "Grace Hopper" || b.PeerPhone != "+14155550101" || b.Status != "ended" {
+			t.Fatalf("%s: %+v", label, b)
+		}
+	}
+
+	res, raw = get(t, srv.URL+"/api/v1/calls/"+created.ID)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("get call status %d: %s", res.StatusCode, raw)
+	}
+	var detail callBody
+	if err := json.Unmarshal(raw, &detail); err != nil {
+		t.Fatal(err)
+	}
+	check("detail", detail)
+	if detail.Note == nil || detail.Note.Text != "kept" || len(detail.Transitions) != 2 {
+		t.Fatalf("note or transitions lost: %s", raw)
+	}
+
+	res, raw = get(t, srv.URL+"/api/v1/calls")
+	var list struct {
+		Total int        `json:"total"`
+		Items []callBody `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &list); err != nil || res.StatusCode != http.StatusOK || list.Total != 1 || len(list.Items) != 1 {
+		t.Fatalf("list status %d err %v: %s", res.StatusCode, err, raw)
+	}
+	check("list", list.Items[0])
 }
 
 func TestWritesAreScopedToOrganization(t *testing.T) {
