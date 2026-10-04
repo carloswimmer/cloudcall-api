@@ -6,25 +6,23 @@ info:
     Contrato HTTP do backend demo CloudCall Desk (Tasks 2–7).
 
     Este documento cobre apenas sondas de saúde, identidade, presença de colegas e busca de contatos.
-    Tasks futuras adicionarão paths que **não** estão listados aqui ainda, incluindo escrita de contatos
-    (`POST`, `PATCH`, `DELETE /api/v1/contacts`), chamadas, dashboard, rotas de simulação demo
-    e o stream SSE (`GET /api/v1/events`).
+    Rotas de tasks futuras ainda não constam neste documento.
 
 servers:
   - url: http://localhost:8080
 
 tags:
-  - name: Saúde
+  - name: Health
     description: Prontidão do processo e do banco de dados (fora de `/api/v1`).
-  - name: Identidade
+  - name: Identity
     description: Usuário demo, organização e colegas.
-  - name: Contatos
+  - name: Contacts
     description: Busca e paginação somente leitura de contatos.
 
 paths:
   /health/live:
     get:
-      tags: [Saúde]
+      tags: [Health]
       operationId: getHealthLive
       summary: Sonda de liveness
       description: Retorna 200 quando o processo está em execução. Não verifica o banco de dados.
@@ -45,7 +43,7 @@ paths:
 
   /health/ready:
     get:
-      tags: [Saúde]
+      tags: [Health]
       operationId: getHealthReady
       summary: Sonda de readiness
       description: Retorna 200 quando o pool do banco responde ao ping; caso contrário, 503.
@@ -76,7 +74,7 @@ paths:
 
   /api/v1/me:
     get:
-      tags: [Identidade]
+      tags: [Identity]
       operationId: getMe
       summary: Usuário demo e organização atuais
       description: |
@@ -104,7 +102,7 @@ paths:
 
   /api/v1/users:
     get:
-      tags: [Identidade]
+      tags: [Identity]
       operationId: listUsers
       summary: Colegas na organização demo
       description: Lista todos os usuários da organização seed, incluindo o usuário demo.
@@ -130,7 +128,7 @@ paths:
 
   /api/v1/me/presence:
     patch:
-      tags: [Identidade]
+      tags: [Identity]
       operationId: patchMyPresence
       summary: Atualizar presença do usuário demo
       description: |
@@ -196,7 +194,7 @@ paths:
 
   /api/v1/contacts:
     get:
-      tags: [Contatos]
+      tags: [Contacts]
       operationId: listContacts
       summary: Buscar e paginar contatos
       description: |
