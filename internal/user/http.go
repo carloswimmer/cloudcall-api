@@ -1,6 +1,7 @@
 package user
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -17,6 +18,19 @@ type Handler struct {
 	store  *Store
 	orgID  uuid.UUID
 	userID uuid.UUID
+	calls  CallLock
+}
+
+// CallLock tells whether a user has a dialing, ringing or active call. It is
+// satisfied by *call.Store; the interface avoids an import cycle (call imports user).
+type CallLock interface {
+	HasNonTerminal(ctx context.Context, orgID, userID uuid.UUID) (bool, error)
+}
+
+// WithCallLock makes PATCH /me/presence answer 409 presence_locked during a live call.
+func (h *Handler) WithCallLock(calls CallLock) *Handler {
+	h.calls = calls
+	return h
 }
 
 func NewHandler(store *Store, orgID, userID uuid.UUID) *Handler {
@@ -80,7 +94,17 @@ func (h *Handler) patchPresence(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Task 11 adds the presence lock during a live call; until then busy is allowed.
+	if h.calls != nil {
+		locked, err := h.calls.HasNonTerminal(r.Context(), h.orgID, h.userID)
+		if err != nil {
+			h.fail(w, r, err)
+			return
+		}
+		if locked {
+			httpx.WriteError(w, r, http.StatusConflict, "presence_locked", "presence cannot be changed during a call", nil)
+			return
+		}
+	}
 	u, err := h.store.SetPresence(r.Context(), h.orgID, h.userID, req.Presence, req.ExpectedVersion)
 	if err != nil {
 		h.fail(w, r, err)

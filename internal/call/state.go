@@ -89,6 +89,8 @@ var (
 	ErrInvalidTransition = errors.New("invalid_transition")
 	ErrVersionMismatch   = errors.New("version_mismatch")
 	ErrValidation        = errors.New("validation_error")
+	// ErrActiveCallExists means the owner already has a non-terminal call.
+	ErrActiveCallExists = errors.New("active_call_exists")
 )
 
 // Next applies cmd to c at time now. It is pure: c is never modified and

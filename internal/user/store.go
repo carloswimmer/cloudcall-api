@@ -85,3 +85,35 @@ func (s *Store) Organization(ctx context.Context, orgID uuid.UUID) (Organization
 	}
 	return o, err
 }
+
+// MarkBusy sets the user to busy inside tx, remembering the previous presence in
+// presence_before_busy (only if not already remembered) and bumping the version.
+func (s *Store) MarkBusy(ctx context.Context, tx *sql.Tx, orgID, userID uuid.UUID) error {
+	res, err := tx.ExecContext(ctx,
+		`UPDATE users
+		 SET presence_before_busy = COALESCE(presence_before_busy, presence),
+		     presence = 'busy',
+		     version = version + 1
+		 WHERE id = $1 AND organization_id = $2`, userID, orgID)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// RestorePresence puts back the presence saved by MarkBusy inside tx, clears
+// presence_before_busy and bumps the version. It is a no-op when nothing was saved.
+func (s *Store) RestorePresence(ctx context.Context, tx *sql.Tx, orgID, userID uuid.UUID) error {
+	_, err := tx.ExecContext(ctx,
+		`UPDATE users
+		 SET presence = presence_before_busy,
+		     presence_before_busy = NULL,
+		     version = version + 1
+		 WHERE id = $1 AND organization_id = $2 AND presence_before_busy IS NOT NULL`, userID, orgID)
+	return err
+}

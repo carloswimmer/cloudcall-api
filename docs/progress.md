@@ -59,3 +59,9 @@
 - Comandos: `go test ./internal/call -count=1`, `go test ./... && go vet ./...`
 - Resultado: `call.Next(c, cmd, now)` devolve a nova chamada (versão +1, `startedAt` ao entrar em `active`, `endedAt` ao entrar em estado terminal) e o `Transition`; erros `ErrVersionMismatch`, `ErrInvalidTransition`, `ErrValidation`
 - Pendente: persistência (store), rotas HTTP de chamadas e trava de presença (Task 11)
+
+## Task 11 — persistência de chamadas, uma ativa por dono, trava de presença e varredura
+- Conceitos: migração `003_calls.sql` com índice único parcial (`WHERE status IN ('dialing','ringing','active')`) que garante uma chamada ativa por dono direto no banco, violação `23505` mapeada para `ErrActiveCallExists`, transações (`*sql.Tx`) compartilhadas entre `call.Store` e `user.Store.MarkBusy/RestorePresence`, `SELECT … FOR UPDATE` para serializar `Apply`, `presence_before_busy` com `COALESCE` para lembrar a presença anterior, interface pequena `CallLock` no pacote `user` para evitar import circular (`call` importa `user`), varredura de inicialização escrita no store (não via `Next`, que rejeita `simulation_interrupted`)
+- Comandos: `DATABASE_URL=… go test ./... -count=1`, `go test -race ./internal/call`, `go vet ./...`
+- Resultado: `call.Store` com `Create`, `Apply`, `Get`, `HasNonTerminal` e `SweepInterrupted`; `PATCH /api/v1/me/presence` devolve 409 `presence_locked` durante chamada; `app.New` varre chamadas interrompidas após o seed
+- Pendente: rotas HTTP de chamadas (Task 12), notas (Task 13), SSE (Task 15)

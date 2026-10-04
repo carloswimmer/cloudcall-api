@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"cloudcall/internal/call"
 	"cloudcall/internal/contact"
 	"cloudcall/internal/platform/config"
 	"cloudcall/internal/platform/db"
@@ -41,8 +42,15 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("seed: %w", err)
 	}
+	users := &user.Store{DB: sqlDB}
+	calls := &call.Store{DB: sqlDB, Users: users}
+	// Calls left over from a previous process cannot continue; fail them before listening.
+	if err := calls.SweepInterrupted(ctx, db.OrganizationID); err != nil {
+		_ = sqlDB.Close()
+		return nil, fmt.Errorf("sweep interrupted calls: %w", err)
+	}
 	a := newApp(sqlDB.PingContext, sqlDB.Close)
-	user.NewHandler(&user.Store{DB: sqlDB}, db.OrganizationID, db.DemoUserID).Register(a.mux)
+	user.NewHandler(users, db.OrganizationID, db.DemoUserID).WithCallLock(calls).Register(a.mux)
 	contact.NewHandler(&contact.Store{DB: sqlDB}, db.OrganizationID).Register(a.mux)
 	return a, nil
 }
