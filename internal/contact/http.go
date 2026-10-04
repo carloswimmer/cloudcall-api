@@ -42,6 +42,13 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 				fields["pageSize"] = perr.Error()
 			}
 		}
+		if len(fields) == 0 {
+			if query.Get("page") != "" {
+				fields["page"] = err.Error()
+			} else if query.Get("pageSize") != "" {
+				fields["pageSize"] = err.Error()
+			}
+		}
 	}
 	if sort := query.Get("sort"); sort != "" && sort != "name" {
 		fields["sort"] = "must be name"

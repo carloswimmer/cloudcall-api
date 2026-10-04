@@ -1,6 +1,8 @@
 package contact_test
 
 import (
+	"math"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -72,5 +74,9 @@ func TestParsePage(t *testing.T) {
 		if _, _, err := contact.ParsePage(c[0], c[1]); err == nil {
 			t.Errorf("page=%q size=%q: expected error", c[0], c[1])
 		}
+	}
+	hugePage := strconv.Itoa(math.MaxInt/contact.MaxPageSize + 2)
+	if _, _, err := contact.ParsePage(hugePage, "100"); err == nil {
+		t.Fatalf("page=%s pageSize=100: expected overflow error", hugePage)
 	}
 }

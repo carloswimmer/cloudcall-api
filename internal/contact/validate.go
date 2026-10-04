@@ -2,6 +2,8 @@ package contact
 
 import (
 	"errors"
+	"math"
+	"math/bits"
 	"strconv"
 	"strings"
 	"time"
@@ -52,7 +54,25 @@ func ParsePage(pageStr, sizeStr string) (page, size int, err error) {
 			return 0, 0, errors.New("pageSize must be between 1 and 100")
 		}
 	}
+	if _, err := listOffset(page, size); err != nil {
+		return 0, 0, err
+	}
 	return page, size, nil
+}
+
+// listOffset is the SQL OFFSET for 1-based page and pageSize. It rejects values
+// whose product would overflow int.
+func listOffset(page, size int) (int, error) {
+	if page < 1 || size < 1 {
+		return 0, errors.New("page must be a positive integer")
+	}
+	skip := uint64(page - 1)
+	s := uint64(size)
+	hi, lo := bits.Mul64(skip, s)
+	if hi != 0 || lo > uint64(math.MaxInt) {
+		return 0, errors.New("page is too large")
+	}
+	return int(lo), nil
 }
 
 // ValidatePhone requires E.164: "+" followed by 8-15 digits, first digit not 0.

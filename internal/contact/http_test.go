@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -239,6 +241,18 @@ func TestListContactsPagination(t *testing.T) {
 	b = decodeList(t, raw)
 	if len(b.Items) != 0 || b.Total != 25 || !strings.Contains(string(raw), `"items":[]`) {
 		t.Fatalf("page 9: %s", raw)
+	}
+}
+
+func TestListContactsHugePageDoesNot500(t *testing.T) {
+	srv := newSeededServer(t)
+	hugePage := strconv.Itoa(math.MaxInt/contact.MaxPageSize + 2)
+	res, raw := get(t, srv.URL+"/api/v1/contacts?page="+hugePage+"&pageSize=100")
+	if res.StatusCode == http.StatusInternalServerError {
+		t.Fatalf("huge page must not 500: %s", raw)
+	}
+	if res.StatusCode != http.StatusBadRequest && res.StatusCode != http.StatusOK {
+		t.Fatalf("status %d: %s", res.StatusCode, raw)
 	}
 }
 

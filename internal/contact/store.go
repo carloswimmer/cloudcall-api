@@ -32,7 +32,11 @@ func (s *Store) List(ctx context.Context, orgID uuid.UUID, q string, page, size 
 		return out, fmt.Errorf("count contacts: %w", err)
 	}
 
-	rows, err := s.DB.QueryContext(ctx, listSQL, orgID, q, size, (page-1)*size)
+	offset, err := listOffset(page, size)
+	if err != nil {
+		return out, fmt.Errorf("list contacts: %w", err)
+	}
+	rows, err := s.DB.QueryContext(ctx, listSQL, orgID, q, size, offset)
 	if err != nil {
 		return out, fmt.Errorf("list contacts: %w", err)
 	}
