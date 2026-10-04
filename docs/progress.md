@@ -1,7 +1,7 @@
 # Progress
 
 ## Task 1 — versions
-- Concepts: Go modules, supported Go/PostgreSQL versions
-- Commands: `go version`, `go mod init cloudcall`
-- Result: module created, versions recorded
-- Pending: HTTP server
+- Conceitos: módulos Go, versões suportadas de Go/PostgreSQL
+- Comandos: `go version`, `go mod init cloudcall`
+- Resultado: módulo criado, versões registradas
+- Pendente: servidor HTTP

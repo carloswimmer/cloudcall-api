@@ -1,24 +1,24 @@
 # CloudCall Desk API (demo only)
 
-Go API for the CloudCall Desk demo. The Angular frontend talks to this service directly via CORS (no dev proxy).
+API Go para a demonstração CloudCall Desk. O repositório Angular fala com esta API via CORS, sem proxy de desenvolvimento.
 
-## Toolchain
+## Ferramentas
 
-Recorded local Go toolchain:
+Toolchain Go local registrado:
 
 ```
 go version go1.26.8 darwin/arm64
 ```
 
-## Database
+## Banco de dados
 
-PostgreSQL runs via Docker using image `postgres:18`. The [pgx](https://github.com/jackc/pgx) driver will be added in Task 5.
+PostgreSQL em Docker com a imagem `postgres:18`. O driver [pgx](https://github.com/jackc/pgx) será adicionado na Task 5.
 
-## Configuration
+## Configuração
 
-Copy `.env.example` to `.env` and adjust values as needed.
+Copie `.env.example` para `.env` e ajuste os valores conforme necessário.
 
-## Commands
+## Comandos
 
 ```bash
 docker compose up -d
