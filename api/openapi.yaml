@@ -1,0 +1,381 @@
+openapi: 3.1.0
+info:
+  title: CloudCall Desk API
+  version: 0.1.0
+  description: |
+    HTTP contract for the CloudCall Desk demo backend (Tasks 2–7).
+
+    This document covers health probes, identity, colleague presence, and contact search only.
+    Later tasks will add paths that are **not** listed here yet, including contact writes
+    (`POST`, `PATCH`, `DELETE /api/v1/contacts`), calls, dashboard, demo simulation routes,
+    and the SSE stream (`GET /api/v1/events`).
+
+servers:
+  - url: http://localhost:8080
+
+tags:
+  - name: Health
+    description: Process and database readiness (outside `/api/v1`).
+  - name: Identity
+    description: Demo user, organization, and colleagues.
+  - name: Contacts
+    description: Read-only contact search and pagination.
+
+paths:
+  /health/live:
+    get:
+      tags: [Health]
+      operationId: getHealthLive
+      summary: Liveness probe
+      description: Returns 200 when the process is running. Does not check the database.
+      responses:
+        "200":
+          description: Process is alive
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: live
+              example:
+                status: live
+
+  /health/ready:
+    get:
+      tags: [Health]
+      operationId: getHealthReady
+      summary: Readiness probe
+      description: Returns 200 when the database pool responds to ping; otherwise 503.
+      responses:
+        "200":
+          description: Ready to serve traffic
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status:
+                    type: string
+                    const: ready
+              example:
+                status: ready
+        "503":
+          description: Database unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                code: internal_error
+                message: database unavailable
+                requestId: 550e8400-e29b-41d4-a716-446655440000
+
+  /api/v1/me:
+    get:
+      tags: [Identity]
+      operationId: getMe
+      summary: Current demo user and organization
+      description: |
+        Returns the seeded demo user, organization settings, and `demoMode: true`.
+        The client never sends user or organization identifiers.
+      responses:
+        "200":
+          description: Demo identity
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Me"
+        "404":
+          description: User or organization not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/users:
+    get:
+      tags: [Identity]
+      operationId: listUsers
+      summary: Colleagues in the demo organization
+      description: Lists all users in the seeded organization, including the demo user.
+      responses:
+        "200":
+          description: Colleague list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [users]
+                properties:
+                  users:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/User"
+        "500":
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/me/presence:
+    patch:
+      tags: [Identity]
+      operationId: patchMyPresence
+      summary: Update demo user presence
+      description: |
+        Optimistic concurrency via `expectedVersion`. Stale version returns 409 `version_mismatch`.
+        Presence lock during an active call is added in a later task; until then `busy` is allowed
+        without a call.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [presence, expectedVersion]
+              properties:
+                presence:
+                  $ref: "#/components/schemas/Presence"
+                expectedVersion:
+                  type: integer
+                  minimum: 1
+                  description: Last known user `version` from a prior GET or PATCH response.
+            examples:
+              offline:
+                value:
+                  presence: offline
+                  expectedVersion: 1
+      responses:
+        "200":
+          description: Updated user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                invalidPresence:
+                  value:
+                    code: validation_error
+                    message: invalid request
+                    fieldErrors:
+                      presence: must be one of available, busy, offline
+                    requestId: 550e8400-e29b-41d4-a716-446655440000
+        "409":
+          description: Version mismatch
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                code: version_mismatch
+                message: presence version is stale
+                requestId: 550e8400-e29b-41d4-a716-446655440000
+        "500":
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/contacts:
+    get:
+      tags: [Contacts]
+      operationId: listContacts
+      summary: Search and paginate contacts
+      description: |
+        Returns contacts for the seeded organization. Search matches name or phone (case-insensitive).
+        Results are ordered by name ascending, then id ascending. `items` is always an array (never null).
+      parameters:
+        - name: q
+          in: query
+          description: Optional search term matched against name or phone.
+          schema:
+            type: string
+        - name: page
+          in: query
+          description: 1-based page index. Defaults to 1.
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: pageSize
+          in: query
+          description: Page size. Defaults to 20; maximum 100.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: sort
+          in: query
+          description: Sort field. Only `name` is supported when provided.
+          schema:
+            type: string
+            enum: [name]
+      responses:
+        "200":
+          description: Paginated contacts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PageContacts"
+        "400":
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                pageSize:
+                  value:
+                    code: validation_error
+                    message: invalid query
+                    fieldErrors:
+                      pageSize: pageSize must be between 1 and 100
+                    requestId: 550e8400-e29b-41d4-a716-446655440000
+        "500":
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+components:
+  schemas:
+    Error:
+      type: object
+      required: [code, message, requestId]
+      properties:
+        code:
+          type: string
+          description: Machine-readable error code.
+          examples:
+            - validation_error
+            - version_mismatch
+            - not_found
+            - internal_error
+        message:
+          type: string
+          description: Human-readable summary.
+        fieldErrors:
+          type: object
+          additionalProperties:
+            type: string
+          description: Per-field validation messages, when applicable.
+        requestId:
+          type: string
+          format: uuid
+          description: Correlates with the `X-Request-Id` response header.
+
+    Presence:
+      type: string
+      enum: [available, busy, offline]
+
+    User:
+      type: object
+      required: [id, name, extension, presence, version]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        extension:
+          type: string
+        presence:
+          $ref: "#/components/schemas/Presence"
+        version:
+          type: integer
+          minimum: 1
+          description: Optimistic concurrency token; increments on presence changes.
+
+    Organization:
+      type: object
+      required: [id, name, brandColor, timezone]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        brandColor:
+          type: string
+          description: CSS color for the organization brand (for example `#1F4E79`).
+        timezone:
+          type: string
+          description: IANA timezone name (for example `Europe/Berlin`).
+
+    Me:
+      type: object
+      required: [user, organization, demoMode]
+      properties:
+        user:
+          $ref: "#/components/schemas/User"
+        organization:
+          $ref: "#/components/schemas/Organization"
+        demoMode:
+          type: boolean
+          const: true
+          description: Demo simulation mode is enabled for this deployment.
+
+    Contact:
+      type: object
+      required: [id, name, phone, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        phone:
+          type: string
+          description: E.164 phone number (for example `+442071838750`).
+        email:
+          type: [string, "null"]
+          description: Optional email; omitted or null when not set.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    PageContacts:
+      type: object
+      required: [items, total, page, pageSize]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Contact"
+          description: Always present; empty when no matches.
+        total:
+          type: integer
+          minimum: 0
+          description: Total contacts matching the query (across all pages).
+        page:
+          type: integer
+          minimum: 1
+          description: Current 1-based page index.
+        pageSize:
+          type: integer
+          minimum: 1
+          maximum: 100
+          description: Page size used for this response.
