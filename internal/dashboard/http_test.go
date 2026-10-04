@@ -124,84 +124,41 @@ func get(t *testing.T, srv *httptest.Server) (int, body, map[string]any) {
 	return res.StatusCode, out, raw
 }
 
-func insertSeededCall(t *testing.T, sqlDB *sql.DB, ctx context.Context, owner uuid.UUID, direction, status, createdAt string) uuid.UUID {
-	t.Helper()
-	id := uuid.New()
-	if _, err := sqlDB.ExecContext(ctx, `
-		INSERT INTO calls (id, organization_id, owner_user_id, peer_name_snapshot, peer_phone_snapshot,
-		                   direction, status, version, created_at)
-		VALUES ($1, $2, $3, 'Peer', '+4930000000', $4, $5, 1, `+createdAt+`)`,
-		id, db.OrganizationID, owner, direction, status); err != nil {
-		t.Fatal(err)
-	}
-	return id
-}
-
 func TestDashboardCountsTodayInUTC(t *testing.T) {
-	sqlDB, ctx := openDB(t)
-	var savedTZ string
-	if err := sqlDB.QueryRowContext(ctx,
-		`SELECT timezone FROM organizations WHERE id = $1`, db.OrganizationID).Scan(&savedTZ); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := sqlDB.ExecContext(ctx,
-		`UPDATE organizations SET timezone = 'UTC' WHERE id = $1`, db.OrganizationID); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_, _ = sqlDB.Exec(`UPDATE organizations SET timezone = $1 WHERE id = $2`, savedTZ, db.OrganizationID)
-	})
-
-	srv := serve(t, sqlDB, db.OrganizationID, db.DemoUserID)
-	status, before, _ := get(t, srv)
-	if status != http.StatusOK {
-		t.Fatalf("status = %d", status)
-	}
-
-	var inserted []uuid.UUID
-	insert := func(direction, status, createdAt string) {
-		inserted = append(inserted, insertSeededCall(t, sqlDB, ctx, db.DemoUserID, direction, status, createdAt))
-	}
-	t.Cleanup(func() {
-		for _, id := range inserted {
-			_, _ = sqlDB.Exec(`DELETE FROM calls WHERE id = $1`, id)
-		}
-	})
-
+	e := newEnv(t, "UTC")
 	// Today: one inbound missed, one outbound ended.
-	insert("inbound", "missed", "now()")
-	insert("outbound", "ended", "now()")
+	e.insertCall(t, e.owner, "inbound", "missed", "now()")
+	e.insertCall(t, e.owner, "outbound", "ended", "now()")
 	// Yesterday: must not count toward today's totals.
-	insert("outbound", "ended", "now() - interval '1 day'")
+	e.insertCall(t, e.owner, "outbound", "ended", "now() - interval '1 day'")
 	// One ringing call today (non-terminal) counts as active and as today's inbound.
-	insert("inbound", "ringing", "now()")
+	e.insertCall(t, e.owner, "inbound", "ringing", "now()")
 
-	status, after, _ := get(t, srv)
+	status, got, _ := get(t, e.srv)
 	if status != http.StatusOK {
 		t.Fatalf("status = %d", status)
 	}
 	wantDate := time.Now().UTC().Format("2006-01-02")
-	if after.Date != wantDate {
-		t.Errorf("date = %q, want %q", after.Date, wantDate)
+	if got.Date != wantDate {
+		t.Errorf("date = %q, want %q", got.Date, wantDate)
 	}
-	if after.Timezone != "UTC" {
-		t.Errorf("timezone = %q, want UTC", after.Timezone)
+	if got.Timezone != "UTC" {
+		t.Errorf("timezone = %q, want UTC", got.Timezone)
 	}
-	delta := func(a, b int) int { return a - b }
-	if d := delta(after.Total, before.Total); d != 3 {
-		t.Errorf("total delta = %d, want 3 (before=%+v after=%+v)", d, before, after)
+	if got.Total != 3 {
+		t.Errorf("total = %d, want 3", got.Total)
 	}
-	if d := delta(after.Inbound, before.Inbound); d != 2 {
-		t.Errorf("inbound delta = %d, want 2", d)
+	if got.Inbound != 2 {
+		t.Errorf("inbound = %d, want 2", got.Inbound)
 	}
-	if d := delta(after.Outbound, before.Outbound); d != 1 {
-		t.Errorf("outbound delta = %d, want 1", d)
+	if got.Outbound != 1 {
+		t.Errorf("outbound = %d, want 1", got.Outbound)
 	}
-	if d := delta(after.Missed, before.Missed); d != 1 {
-		t.Errorf("missed delta = %d, want 1", d)
+	if got.Missed != 1 {
+		t.Errorf("missed = %d, want 1", got.Missed)
 	}
-	if d := delta(after.Active, before.Active); d != 1 {
-		t.Errorf("active delta = %d, want 1", d)
+	if got.Active != 1 {
+		t.Errorf("active = %d, want 1", got.Active)
 	}
 }
 
