@@ -4,16 +4,18 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+
+	"github.com/google/uuid"
 )
 
 // Stable demo identifiers shared by the seed, API and tests.
-const (
-	OrganizationID = "11111111-1111-4111-8111-111111111111"
-	DemoUserID     = "22222222-2222-4222-8222-222222222201"
-	Colleague1ID   = "22222222-2222-4222-8222-222222222202"
-	Colleague2ID   = "22222222-2222-4222-8222-222222222203"
+var (
+	OrganizationID = uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+	DemoUserID     = uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+	Colleague1ID   = uuid.MustParse("cccccccc-cccc-cccc-cccc-cccccccccccc")
+	Colleague2ID   = uuid.MustParse("dddddddd-dddd-dddd-dddd-dddddddddddd")
 	// Contact1ID is reserved for the contacts seed (no contact is inserted yet).
-	Contact1ID = "33333333-3333-4333-8333-333333333301"
+	Contact1ID = uuid.MustParse("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
 )
 
 // Seed inserts the demo organization and users. It is idempotent: existing rows
@@ -32,7 +34,11 @@ func Seed(ctx context.Context, sqlDB *sql.DB) error {
 		return fmt.Errorf("seed organization: %w", err)
 	}
 
-	users := []struct{ id, name, extension string }{
+	users := []struct {
+		id        uuid.UUID
+		name      string
+		extension string
+	}{
 		{DemoUserID, "Alex Rivera", "100"},
 		{Colleague1ID, "Jordan Lee", "101"},
 		{Colleague2ID, "Sam Okafor", "102"},

@@ -1,13 +1,36 @@
 package db_test
 
 import (
+	"context"
+	"database/sql"
 	"testing"
+
+	"github.com/google/uuid"
 
 	"cloudcall/internal/platform/db"
 )
 
+func cleanupLegacyDemoSeed(t *testing.T, sqlDB *sql.DB, ctx context.Context) {
+	t.Helper()
+	legacyOrg := "11111111-1111-4111-8111-111111111111"
+	legacyUsers := []string{
+		"22222222-2222-4222-8222-222222222201",
+		"22222222-2222-4222-8222-222222222202",
+		"22222222-2222-4222-8222-222222222203",
+	}
+	for _, uid := range legacyUsers {
+		if _, err := sqlDB.ExecContext(ctx, "DELETE FROM users WHERE id = $1", uid); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := sqlDB.ExecContext(ctx, "DELETE FROM organizations WHERE id = $1", legacyOrg); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSeedIsIdempotentAndMatchesDemoData(t *testing.T) {
 	sqlDB, ctx := openTestDB(t)
+	cleanupLegacyDemoSeed(t, sqlDB, ctx)
 
 	if err := db.Migrate(ctx, sqlDB); err != nil {
 		t.Fatal(err)
@@ -20,10 +43,12 @@ func TestSeedIsIdempotentAndMatchesDemoData(t *testing.T) {
 	}
 
 	var orgs, users int
-	if err := sqlDB.QueryRowContext(ctx, "SELECT count(*) FROM organizations").Scan(&orgs); err != nil {
+	if err := sqlDB.QueryRowContext(ctx,
+		"SELECT count(*) FROM organizations WHERE id = $1", db.OrganizationID).Scan(&orgs); err != nil {
 		t.Fatal(err)
 	}
-	if err := sqlDB.QueryRowContext(ctx, "SELECT count(*) FROM users").Scan(&users); err != nil {
+	if err := sqlDB.QueryRowContext(ctx,
+		"SELECT count(*) FROM users WHERE organization_id = $1", db.OrganizationID).Scan(&users); err != nil {
 		t.Fatal(err)
 	}
 	if orgs != 1 || users != 3 {
@@ -50,7 +75,7 @@ func TestSeedIsIdempotentAndMatchesDemoData(t *testing.T) {
 		t.Fatalf("demo user %q %q %q", uname, ext, presence)
 	}
 
-	for _, id := range []string{db.Colleague1ID, db.Colleague2ID} {
+	for _, id := range []uuid.UUID{db.Colleague1ID, db.Colleague2ID} {
 		var n int
 		if err := sqlDB.QueryRowContext(ctx,
 			"SELECT count(*) FROM users WHERE id = $1 AND organization_id = $2", id, db.OrganizationID).
@@ -65,6 +90,7 @@ func TestSeedIsIdempotentAndMatchesDemoData(t *testing.T) {
 
 func TestSeedDoesNotResetExistingPresence(t *testing.T) {
 	sqlDB, ctx := openTestDB(t)
+	cleanupLegacyDemoSeed(t, sqlDB, ctx)
 
 	if err := db.Migrate(ctx, sqlDB); err != nil {
 		t.Fatal(err)
